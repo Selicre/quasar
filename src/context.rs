@@ -37,6 +37,13 @@ impl LineInfo {
             filename
         }
     }
+    pub fn custom(source: String) -> Self {
+        LineInfo {
+            line: 0,
+            col: 0,
+            filename: source.into()
+        }
+    }
     pub fn cli() -> Self {
         LineInfo {
             line: 0,
@@ -56,6 +63,11 @@ pub struct LocalContext {
     pub col: u32
 }
 
+pub struct Needle {
+    start: usize,
+    source: LineInfo
+}
+
 #[derive(Clone, Debug)]
 pub struct ContextStr {
     full: Rc<str>,
@@ -64,6 +76,28 @@ pub struct ContextStr {
 }
 
 impl ContextStr {
+    pub fn new(full: String, source: LineInfo) -> Self {
+        let range = 0..full.len();
+        let full = full.into_boxed_str().into();
+        ContextStr { full, source, range }
+    }
+    pub fn cli() -> Self {
+        ContextStr {
+            full: "".into(),
+            range: 0..0,
+            source: LineInfo::cli(),
+        }
+    }
+    pub fn line_highlight(&self, severity: crate::message::Severity) -> String {
+        // this whole thing is stupid and temporary
+        let start = self.full[..self.range.start].rfind('\n').map(|c| c+1).unwrap_or(0);
+        let end = self.full[self.range.end..].find('\n').map(|c| c + self.range.end).unwrap_or(self.full.len() - self.range.end);
+        let pad_start = " ".repeat(self.range.start - start);
+        let pad_end = " ".repeat(end - self.range.end);
+        let highlight = "^".repeat(self.range.end - self.range.start);
+        let pad_line_num = " ".repeat(format!("{}", self.source.line).len());
+        format!(" {} |\n {} | {}\n {} | \x1B[1;38;5;{}m{}{}{}\x1B[0m", pad_line_num, self.source.line, &self.full[start..end], pad_line_num, severity.color(), pad_start, highlight, pad_end)
+    }
     pub fn local(&self) -> LocalContext {
         LocalContext {
             start: self.range.start,
@@ -83,13 +117,20 @@ impl ContextStr {
             }
         }
     }
+    pub fn start(&self) -> usize {
+        self.range.start
+    }
     pub fn source(&self) -> &LineInfo {
         &self.source
     }
-    pub fn new(full: String, source: LineInfo) -> Self {
-        let range = 0..full.len();
-        let full = full.into_boxed_str().into();
-        ContextStr { full, source, range }
+    pub fn cut(&mut self, by: usize) -> ContextStr {
+        let cx = ContextStr {
+            full: self.full.clone(),
+            range: self.range.end-by..self.range.end,
+            source: self.source.clone()
+        };
+        self.range.end -= by;
+        cx
     }
     pub fn advance(&mut self, by: usize) -> ContextStr {
         let cx = ContextStr {
@@ -103,6 +144,39 @@ impl ContextStr {
         let prefix = &self.full[start..][..by];
         self.source.advance(prefix);
         cx
+    }
+    pub fn advance_some(&mut self, by: Option<usize>) -> ContextStr {
+        let by = if let Some(by) = by {
+            by
+        } else {
+            self.range.end - self.range.start
+        };
+        self.advance(by)
+    }
+    pub fn advance_char(&mut self) -> Option<char> {
+        self.chars().next().map(|c| { self.advance(c.len_utf8()); c })
+    }
+    pub fn prefix_from(&mut self, from: Needle) -> ContextStr {
+        ContextStr {
+            full: self.full.clone(),
+            range: from.start..self.range.start,
+            source: from.source
+        }
+    }
+    pub fn needle(&self) -> Needle {
+        Needle {
+            start: self.range.start,
+            source: self.source.clone()
+        }
+    }
+    pub fn skip_if(&mut self, src: &str) -> bool {
+        if let Some(c) = self.strip_prefix(src) {
+            let range = c.as_bytes().as_ptr_range();
+            self.restrict_to(range);
+            true
+        } else {
+            false
+        }
     }
     fn restrict_to(&mut self, range: std::ops::Range<*const u8>) {
         let s = &*self;

@@ -1,15 +1,19 @@
-mod parser;
+mod splitter;
 mod context;
 mod message;
 mod executor;
+mod lexer;
 
 use executor::Target;
-use context::LineInfo;
+use context::ContextStr;
 
 fn main() {
     let mut target = Target::new();
-    executor::exec_file("test.asm".into(), LineInfo::cli(), &mut target);
+    executor::exec_file("test.asm".into(), ContextStr::cli(), &mut target);
     for i in target.iter_messages() {
         println!("{}", i);
+    }
+    if target.has_error() {
+        println!("Assembly failed");
     }
 }

@@ -39,6 +39,12 @@ impl Token {
     pub fn is_decimal(&self) -> bool {
         matches!(self.kind, TokenKind::Number { radix: 10, .. })
     }
+    pub fn as_number(&self) -> Option<i32> {
+        match self.kind {
+            TokenKind::Number { value, .. } => Some(value),
+            _ => None
+        }
+    }
     pub fn as_string(&self) -> Option<ContextStr> {
         if self.is_string() {
             Some(self.span.clone())
@@ -136,10 +142,9 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
             let span = input.prefix_from(needle);
             out.push(Token { span, kind: TokenKind::String });
         } else if c == '!' {
-            if let Some((span, escaped)) = parse_define(&mut input) {
+            if let Some((span, escaped)) = parse_define(&mut input, target) {
                 out.push(Token { span, kind: TokenKind::Define { escaped } });
             } else {
-                target.push_error(input.clone(), 6, format!("Unclosed escaped define"));
                 return out;
             }
         } else if c == '\\' {
@@ -180,7 +185,7 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
     out
 }
 
-fn parse_define(input: &mut ContextStr) -> Option<(ContextStr, bool)> {
+fn parse_define(input: &mut ContextStr, target: &mut Target) -> Option<(ContextStr, bool)> {
     let is_ident = |c: char| c.is_alphanumeric() || c == '_';
     let needle = input.needle();
     let escaped = input.skip_if("!{");
@@ -194,6 +199,7 @@ fn parse_define(input: &mut ContextStr) -> Option<(ContextStr, bool)> {
         }) {
             c
         } else {
+            target.push_error(input.clone(), 6, format!("Unclosed escaped define"));
             return None;
         };
         input.advance(end+1);
@@ -218,15 +224,13 @@ pub fn expand_str(mut input: ContextStr, target: &mut Target) -> Option<String> 
     let mut out = String::new();
 
     while let Some(mut c) = input.chars().next() {
-        if c == '!' {
-            let (s, escaped) = if let Some(r) = parse_define(&mut input) { r } else {
-                target.push_error(orig, 6, format!("Unclosed escaped define"));
-                return None;
-            };
+        let next_ident = input.chars().nth(1).map(|c| c.is_alphanumeric() || c == '_' || c == '{').unwrap_or(false);
+        if c == '!' && next_ident {
+            let (s, escaped) = parse_define(&mut input, target)?;
             let name = define_name(&s, escaped);
             let temp;
             let name_s = if escaped {
-                temp = if let Some(s) = expand_str(name.clone(), target) { s } else { return None; };
+                temp = expand_str(name.clone(), target)?;
                 &temp
             } else { &*name };
             if let Some(value) = target.defines().get(name_s) {

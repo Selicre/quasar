@@ -51,9 +51,14 @@ impl std::fmt::Display for Message {
             write!(f, "[{}{:04}]", self.severity.symbol(), self.code)?;
         }
         writeln!(f, "\x1B[38;5;15m: {}\x1B[0m", self.data)?;
-        writeln!(f, "    => at {}", self.source.source().short())?;
-        if self.source.source().line != 0 {
-            writeln!(f, "{}", self.source.line_highlight(self.severity))?;
+
+        let mut cur = Some(self.source.clone());
+        while let Some(c) = cur {
+            writeln!(f, "    => at {}", c.source().short())?;
+            if c.source().line != 0 {
+                writeln!(f, "{}", c.line_highlight(self.severity))?;
+            }
+            cur = c.parent().cloned();
         }
         for i in self.help.iter() {
             writeln!(f, "    => help: {}", i)?;
@@ -76,6 +81,12 @@ impl Message {
     }
     pub fn info(source: ContextStr, code: usize, data: String) -> Self {
         let severity = Severity::Info;
+        Message {
+            source, code, severity, data, help: vec![]
+        }
+    }
+    pub fn debug(source: ContextStr, code: usize, data: String) -> Self {
+        let severity = Severity::Debug;
         Message {
             source, code, severity, data, help: vec![]
         }

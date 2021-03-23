@@ -7,8 +7,13 @@ use crate::message::Message;
 
 use crate::executor::Target;
 
+#[derive(Debug)]
+pub struct Block {
+    pub context: LocalContext,
+    pub newline: bool
+}
 
-pub fn split_file(mut file: ContextStr, target: &mut Target) -> Vec<LocalContext> {
+pub fn split_file(mut file: ContextStr, target: &mut Target) -> Vec<Block> {
     let mut stmts = vec![];
 
     // Split file into statements
@@ -46,7 +51,7 @@ fn split_lines(line: &mut ContextStr) -> Option<ContextStr> {
     Some(line.prefix_from(needle))
 }
 
-pub fn parse_line(mut line: ContextStr, target: &mut Target, stmts: &mut Vec<LocalContext>) {
+pub fn parse_line(mut line: ContextStr, target: &mut Target, stmts: &mut Vec<Block>) {
     if let Some(idx) = line.find(';') {
         let l = line.advance(idx);
         if let Some(c) = line.strip_prefix(";@") {
@@ -79,7 +84,7 @@ pub fn parse_line(mut line: ContextStr, target: &mut Target, stmts: &mut Vec<Loc
             }
         } else if line.starts_with(" : ") {
             let mut stmt = line.prefix_from(needle);
-            preparse_stmt(stmt, target, stmts);
+            preparse_stmt(stmt, false, target, stmts);
             line.advance(2);    // skip the separator
             needle = line.needle();
         } else {
@@ -87,7 +92,7 @@ pub fn parse_line(mut line: ContextStr, target: &mut Target, stmts: &mut Vec<Loc
         }
     }
     let mut stmt = line.prefix_from(needle);
-    preparse_stmt(stmt, target, stmts);
+    preparse_stmt(stmt, true, target, stmts);
     // Problem with the code below: does not respect strings. It is much faster though
     /*
     while let Some(next_stmt) = line.find(" : ") {
@@ -98,7 +103,7 @@ pub fn parse_line(mut line: ContextStr, target: &mut Target, stmts: &mut Vec<Loc
     preparse_stmt(line, target, stmts);*/
 }
 
-pub fn preparse_stmt(mut stmt: ContextStr, target: &mut Target, stmts: &mut Vec<LocalContext>) {
+pub fn preparse_stmt(mut stmt: ContextStr, newline: bool, target: &mut Target, stmts: &mut Vec<Block>) {
     stmt.trim();
-    stmts.push(stmt.local());
+    stmts.push(Block { context: stmt.local(), newline });
 }

@@ -68,24 +68,30 @@ pub struct Needle {
     source: LineInfo
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ContextStr {
     full: Rc<str>,
     range: std::ops::Range<usize>,
     source: LineInfo,
+    parent: Option<Box<ContextStr>>
 }
 
 impl ContextStr {
     pub fn new(full: String, source: LineInfo) -> Self {
         let range = 0..full.len();
         let full = full.into_boxed_str().into();
-        ContextStr { full, source, range }
+        ContextStr { full, source, range, parent: None }
+    }
+    pub fn set_parent(&mut self, parent: ContextStr) { self.parent = Some(Box::new(parent)); }
+    pub fn parent(&self) -> Option<&ContextStr> {
+        self.parent.as_deref()
     }
     pub fn cli() -> Self {
         ContextStr {
             full: "".into(),
             range: 0..0,
             source: LineInfo::cli(),
+            parent: None,
         }
     }
     pub fn line_highlight(&self, severity: crate::message::Severity) -> String {
@@ -113,8 +119,9 @@ impl ContextStr {
             source: LineInfo {
                 line: local.line,
                 col: local.col,
-                filename
-            }
+                filename,
+            },
+            parent: self.parent.clone(),
         }
     }
     pub fn start(&self) -> usize {
@@ -127,7 +134,8 @@ impl ContextStr {
         let cx = ContextStr {
             full: self.full.clone(),
             range: self.range.end-by..self.range.end,
-            source: self.source.clone()
+            source: self.source.clone(),
+            parent: self.parent.clone(),
         };
         self.range.end -= by;
         cx
@@ -136,7 +144,8 @@ impl ContextStr {
         let cx = ContextStr {
             full: self.full.clone(),
             range: self.range.start..self.range.start+by,
-            source: self.source.clone()
+            source: self.source.clone(),
+            parent: self.parent.clone(),
         };
 
         let start = self.range.start;
@@ -160,7 +169,8 @@ impl ContextStr {
         ContextStr {
             full: self.full.clone(),
             range: from.start..self.range.start,
-            source: from.source
+            source: from.source,
+            parent: self.parent.clone(),
         }
     }
     pub fn needle(&self) -> Needle {
@@ -195,6 +205,11 @@ impl ContextStr {
     }
 }
 impl std::fmt::Display for ContextStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.pad(&self)
+    }
+}
+impl std::fmt::Debug for ContextStr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.pad(&self)
     }

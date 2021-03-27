@@ -82,6 +82,12 @@ impl ContextStr {
         let full = full.into_boxed_str().into();
         ContextStr { full, source, range, parent: None }
     }
+    pub fn empty() -> Self {
+        let range = 0..0;
+        let source = LineInfo::custom("<empty>".into());
+        let full = "".into();
+        ContextStr { full, source, range, parent: None }
+    }
     pub fn set_parent(&mut self, parent: ContextStr) { self.parent = Some(Box::new(parent)); }
     pub fn parent(&self) -> Option<&ContextStr> {
         self.parent.as_deref()
@@ -211,7 +217,8 @@ impl std::fmt::Display for ContextStr {
 }
 impl std::fmt::Debug for ContextStr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.pad(&self)
+        use std::fmt::Write;
+        write!(f, "\"{}\"", self.escape_debug())
     }
 }
 

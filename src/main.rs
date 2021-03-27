@@ -3,6 +3,7 @@ mod context;
 mod message;
 mod executor;
 mod lexer;
+mod expr;
 
 use executor::Target;
 use context::ContextStr;

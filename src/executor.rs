@@ -2,17 +2,22 @@ use std::rc::Rc;
 use std::fmt::Display;
 use std::collections::HashMap;
 
+use indexmap::IndexSet;
+
 use crate::context::{LineInfo, LocalContext, ContextStr};
 use crate::message::Message;
 
 use crate::splitter::{self, Block};
 use crate::lexer::{self, Token, TokenKind};
+use crate::expr;
 
 pub struct Target {
     files: HashMap<Rc<str>, ParsedFile>,
     messages: Vec<Message>,
     defines: HashMap<String, Vec<Token>>,
-    has_error: bool
+    label_idx: IndexSet<expr::Label>,
+    label_ctx: LabelCtx,
+    has_error: bool,
 }
 impl Target {
     pub fn new() -> Self {
@@ -20,6 +25,8 @@ impl Target {
             files: HashMap::new(),
             messages: vec![],
             defines: HashMap::new(),
+            label_idx: IndexSet::new(),
+            label_ctx: LabelCtx::default(),
             has_error: false,
         }
     }
@@ -39,6 +46,53 @@ impl Target {
     }
     pub fn has_error(&self) -> bool { self.has_error }
     pub fn defines(&self) -> &HashMap<String, Vec<Token>> { &self.defines }
+    pub fn label_id(&mut self, label: expr::Label) -> usize {
+        self.label_idx.insert_full(label).0
+    }
+    pub fn set_label(&mut self, mut label: expr::Label, context: ContextStr) {
+        match &mut label {
+            expr::Label::Named { stack } => self.label_ctx.named = stack.clone(),
+            expr::Label::AnonPos { depth, pos } => {
+                if self.label_ctx.pos.len() <= *depth {
+                    self.label_ctx.pos.resize(*depth+1, 0);
+                }
+                self.label_ctx.pos[*depth] += 1;
+                *pos = self.label_ctx.pos[*depth];
+            }
+            expr::Label::AnonNeg { depth, pos } => {
+                if self.label_ctx.neg.len() <= *depth {
+                    self.label_ctx.neg.resize(*depth+1, 0);
+                }
+                self.label_ctx.neg[*depth] += 1;
+                *pos = self.label_ctx.neg[*depth];
+            }
+        }
+        let (id, _) = self.label_idx.insert_full(label.clone());
+        println!("set label {} to {:?}", id, label);
+    }
+    pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
+        if depth > self.label_ctx.named.len() {
+            self.push_error(label, 24, "Label has no parent".into());
+            vec![]
+        } else {
+            let mut c = self.label_ctx.named[..depth].to_vec();
+            c.push(label.to_string());
+            c
+        }
+    }
+    pub fn resolve_anon(&mut self, depth: usize, pos: bool, label: ContextStr) -> usize {
+        if pos {
+            if self.label_ctx.pos.len() <= depth {
+                self.label_ctx.pos.resize(depth+1, 0);
+            }
+            self.label_ctx.pos[depth]+1
+        } else {
+            if self.label_ctx.neg.len() <= depth {
+                self.label_ctx.neg.resize(depth+1, 0);
+            }
+            self.label_ctx.neg[depth]
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +108,12 @@ impl ParsedFile {
     }
 }
 
+#[derive(Default)]
+struct LabelCtx {
+    named: Vec<String>,
+    neg: Vec<usize>,
+    pos: Vec<usize>,
+}
 #[derive(Default)]
 struct ExecCtx {
     exec_ptr: usize,
@@ -288,26 +348,41 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
     expanded
 }
 
-struct TokenList<'a> {
+#[derive(Clone)]
+pub struct TokenList<'a> {
     inner: &'a [Token],
     pos: usize
 }
 
 impl<'a> TokenList<'a> {
-    fn new(inner: &'a [Token]) -> Self {
+    pub fn new(inner: &'a [Token]) -> Self {
         Self { inner, pos: 0 }
     }
-    fn next_non_wsp(&mut self) -> Option<&'a Token> {
+    pub fn next_non_wsp(&mut self) -> Option<&'a Token> {
         while self.inner.get(self.pos)?.is_whitespace() { self.pos += 1; }
         let res = self.inner.get(self.pos);
         self.pos += 1;
         res
     }
+    pub fn next(&mut self) -> Option<&'a Token> {
+        let res = self.inner.get(self.pos);
+        self.pos += 1;
+        res
+    }
+    pub fn peek(&mut self) -> Option<&'a Token> {
+        self.clone().next()
+    }
+    pub fn peek_non_wsp(&mut self) -> Option<&'a Token> {
+        self.clone().next_non_wsp()
+    }
+    pub fn rest(&self) -> &'a [Token] {
+        &self.inner[self.pos..]
+    }
 }
 
 
 fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut ExecCtx) {
-    print!("{} ", if ctx.enabled() { "e" } else { "n" });
+    print!("{} ", if ctx.enabled() { "+" } else { " " });
     for i in tokens.iter() {
         print!("{}", i.span);
     }
@@ -315,6 +390,20 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
 
     let mut tokens = TokenList::new(tokens);
 
+    loop {
+        let mut peek = tokens.clone();
+        // Parse labels
+        if let Some(c) = expr::parse_label(&mut peek, false, target) {
+            let ate_colon = peek.peek().map(|n| &*n.span == ":").unwrap_or(false);
+            if ate_colon { peek.next(); }
+            if c.1.no_colon() || ate_colon {
+                tokens = peek;
+                target.set_label(c.1, c.0);
+                continue;
+            }
+        }
+        break;
+    }
 
     let if_inline = ctx.if_inline;
     if ctx.if_inline && newline {
@@ -446,9 +535,28 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
                 if count < 0 { count = 0; }
                 ctx.rep_count = Some(count as usize);
             }
+            "incsrc" if ctx.enabled() => {
+                let temp;
+                let c = if let Some(c) = tokens.peek_non_wsp() {
+                    if c.is_string() {
+                        temp = if let Some(c) = lexer::expand_str(c.span.clone(), target) { c } else { return; };
+                        &temp[1..temp.len()-1]
+                    } else {
+                        temp = tokens.rest().iter().map(|c| &*c.span).collect::<Vec<_>>().concat();
+                        temp.trim()
+                    }
+                } else {
+                    ""
+                };
+                exec_file(c.into(), cmd.span.clone(), target);
+            }
             "print" if ctx.enabled() => {
                 let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
                 target.push_msg(Message::info(cmd.span.clone(), 0, c))
+            }
+            "expr" if ctx.enabled() => {
+                let c = expr::Expression::parse(&mut tokens, target);
+                target.push_msg(Message::info(cmd.span.clone(), 0, format!("{:?}", c)))
             }
             _ => {}
         }

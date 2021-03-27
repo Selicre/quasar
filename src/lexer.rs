@@ -118,9 +118,10 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
                 target.push_error(span.clone(), 3, format!("Number overflows a 32-bit value"));
             }
             if num.len() == 0 {
-                target.push_error(span.clone(), 4, format!("Number is empty"));
+                out.push(Token { span, kind: TokenKind::Symbol });
+            } else {
+                out.push(Token { span, kind: TokenKind::Number { value, radix, length: num.len() } });
             }
-            out.push(Token { span, kind: TokenKind::Number { value, radix, length: num.len() } });
         } else if c.is_whitespace() {
             let span = input.advance_some(input.find(|c: char| !c.is_whitespace()));
             out.push(Token { span, kind: TokenKind::Whitespace });
@@ -158,6 +159,9 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
                 target.push_error(input.clone(), 10, format!("Stray escape sequence {}", input));
                 return out;
             }
+        } else if c == '+' || c == '-' || c == '.' {
+            let span = input.advance_some(input.find(|n: char| n != c));
+            out.push(Token { span, kind: TokenKind::Symbol });
         } else {
             let tokens = [
                 "#=", "**", "<:",

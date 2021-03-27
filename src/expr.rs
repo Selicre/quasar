@@ -267,14 +267,66 @@ impl Expression {
         });
         Self { nodes }
     }
+    pub fn eval_const(&self, target: &mut Target) -> f64 {
+        let mut stack = vec![];
+
+        let get_val = |arg: Value, span: &ContextStr, target: &mut Target| match arg {
+            Value::Literal { value, .. } => value,
+            Value::Label(_) => {
+                target.push_error(span.clone(), 34, "Labels are not allowed in const contexts".into());
+                0.0
+            },
+            Value::String => {
+                target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
+                0.0
+            },
+            Value::Error => 0.0,
+        };
+
+        for (span, i) in self.nodes.iter() {
+            match i {
+                ExprNode::Value(v) => {
+                    stack.push((span, v.clone()));
+                }
+                ExprNode::Unop(op) => {
+                    let (span1, arg) = stack.pop().expect("unbalanced expr");
+                    let arg = get_val(arg, &span1, target);
+                    let value = op.exec(&span, arg, target);
+                    stack.push((span, Value::Literal { value, size_hint: 0 }));
+                }
+                ExprNode::Binop(op) => {
+                    let (span1, arg1) = stack.pop().expect("unbalanced expr");
+                    let arg1 = get_val(arg1, &span1, target);
+                    let (span2, arg2) = stack.pop().expect("unbalanced expr");
+                    let arg2 = get_val(arg2, &span2, target);
+                    let value = op.exec(&span, arg1, arg2, target);
+                    stack.push((span, Value::Literal { value, size_hint: 0 }));
+                }
+                ExprNode::Call(len) => {
+                    panic!()
+                }
+                _ => panic!()
+            }
+        }
+        let val = stack.pop().expect("unbalanced expr");
+        get_val(val.1, val.0, target)
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum Value {
     Literal { value: f64, size_hint: usize },
     Label(usize),
     String,
     Error
+}
+impl Value {
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Self::Literal { value, .. } => *value != 0.0,
+            _ => true
+        }
+    }
 }
 
 #[derive(Clone,Debug,PartialEq,Eq,Hash)]

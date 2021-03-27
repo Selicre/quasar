@@ -414,9 +414,13 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
     if cmd.is_ident() {
         match &*cmd.span {
             "if" => {
-                if let Some(c) = tokens.next_non_wsp() {
-                    if ctx.enabled() && &*c.span != "1" {  // todo: proper expr handling
-                        ctx.if_depth = Some(ctx.if_stack.len());
+                if let Some(_) = tokens.peek_non_wsp() {
+                    if ctx.enabled() {
+                        let expr = expr::Expression::parse(&mut tokens, target);
+                        let val = expr.eval_const(target);
+                        if val == 0.0 {
+                            ctx.if_depth = Some(ctx.if_stack.len());
+                        }
                     }
                     ctx.if_inline = !newline;
                     ctx.if_stack.push(None);
@@ -427,9 +431,13 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
                 }
             }
             "while" => {
-                if let Some(c) = tokens.next_non_wsp() {
-                    if ctx.enabled() && &*c.span != "1" {  // todo: proper expr handling
-                        ctx.if_depth = Some(ctx.if_stack.len());
+                if let Some(c) = tokens.peek_non_wsp() {
+                    if ctx.enabled() {
+                        let expr = expr::Expression::parse(&mut tokens, target);
+                        let val = expr.eval_const(target);
+                        if val == 0.0 {
+                            ctx.if_depth = Some(ctx.if_stack.len());
+                        }
                     }
                     ctx.if_inline = !newline;
                     ctx.if_stack.push(Some(ctx.exec_ptr));
@@ -457,14 +465,16 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
                         .with_help(format!("remove `elseif`")));
                     return;
                 }
-                if let Some(c) = tokens.next_non_wsp() {
+                if let Some(_) = tokens.peek_non_wsp() {
                     if ctx.enabled() {
                         ctx.if_branch_done = true;
                     }
                     if ctx.if_branch_done {
                         ctx.if_depth = Some(ctx.if_stack.len());
                     } else {
-                        if &*c.span != "1" {  // todo: proper expr handling
+                        let expr = expr::Expression::parse(&mut tokens, target);
+                        let val = expr.eval_const(target);
+                        if val == 0.0 {
                             ctx.if_depth = Some(ctx.if_stack.len());
                         } else {
                             ctx.if_depth = None;
@@ -521,18 +531,15 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
                 }
                 ctx.run_endif();
             }
-            "repeat" if ctx.enabled() => {
-                let count = if let Some(c) = tokens.next_non_wsp() { c } else {
+            "rep" if ctx.enabled() => {
+                if tokens.peek_non_wsp().is_none() {
                     target.push_msg(Message::error(cmd.span.clone(), 17, format!("`repeat` statement with no loop count"))
                         .with_help(format!("add a loop count, like `repeat 5`")));
                     return;
-                };
-                let mut count = if let Some(c) = count.as_number() { c } else {
-                    target.push_msg(Message::error(cmd.span.clone(), 18, format!("`repeat` statement with non-numeric loop count"))
-                        .with_help(format!("use a number as a loop count, like `repeat 5`")));
-                    return;
-                };
-                if count < 0 { count = 0; }
+                }
+                let expr = expr::Expression::parse(&mut tokens, target);
+                let mut count = expr.eval_const(target);
+                if count < 0.0 { count = 0.0; }
                 ctx.rep_count = Some(count as usize);
             }
             "incsrc" if ctx.enabled() => {

@@ -1,5 +1,7 @@
 # Quasar - a modern SNES assembler
 
+![Logo](https://raw.githubusercontent.com/Selicre/quasar/994d6438cd091a6176b28a9d011f72a82c1698be/logo.svg)
+
 Quasar is an assembler that targets the WDC 65816 architecture and lets you create patches for various SNES ROMs, primarily Super Mario World. The goal of this project is to allow beginners to quickly diagnose the issues with their code and be able to fix them at compile time, rather than having to use a debugger to diagnose crashes.
 
 ## Features
@@ -20,8 +22,8 @@ Quasar is currently in active development, so all of this is what you should exp
 
 ## Roadmap
 
-  - implement a subset of asar functionality to be more approachable for beginners
-  - implement the rest of (sane) functionality to be useful as a complete replacement
-  - implement own syntax to be useful as a general assembler while still being compatible with asar patches
+  - Implement a subset of asar functionality to be more approachable for beginners
+  - Implement the rest of (sane) functionality to be useful as a complete replacement
+  - Implement own syntax to be useful as a general assembler while still being compatible with asar patches
 
 Eventually, quasar will change from being a subset of asar with good errors into being a superset.

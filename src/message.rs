@@ -75,9 +75,11 @@ impl Message {
             source, code, severity, data, help: vec![]
         }
     }
-    pub fn with_help(mut self, msg: String) -> Self {
-        self.help.push(msg);
-        self
+    pub fn warning(source: ContextStr, code: usize, data: String) -> Self {
+        let severity = Severity::Warning;
+        Message {
+            source, code, severity, data, help: vec![]
+        }
     }
     pub fn info(source: ContextStr, code: usize, data: String) -> Self {
         let severity = Severity::Info;
@@ -90,5 +92,9 @@ impl Message {
         Message {
             source, code, severity, data, help: vec![]
         }
+    }
+    pub fn with_help(mut self, msg: String) -> Self {
+        self.help.push(msg);
+        self
     }
 }

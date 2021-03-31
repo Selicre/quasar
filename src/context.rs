@@ -104,11 +104,15 @@ impl ContextStr {
         // this whole thing is stupid and temporary
         let start = self.full[..self.range.start].rfind('\n').map(|c| c+1).unwrap_or(0);
         let end = self.full[self.range.end..].find('\n').map(|c| c + self.range.end).unwrap_or(self.full.len() - self.range.end);
-        let pad_start = " ".repeat(self.range.start - start);
-        let pad_end = " ".repeat(end - self.range.end);
-        let highlight = "^".repeat(self.range.end - self.range.start);
-        let pad_line_num = " ".repeat(format!("{}", self.source.line).len());
-        format!(" {} |\n {} | {}\n {} | \x1B[1;38;5;{}m{}{}{}\x1B[0m", pad_line_num, self.source.line, &self.full[start..end], pad_line_num, severity.color(), pad_start, highlight, pad_end)
+        if self.range.start >= start && end >= self.range.end && self.range.end > self.range.start {
+            let pad_start = " ".repeat(self.range.start - start);
+            let pad_end = " ".repeat(end - self.range.end);
+            let highlight = "^".repeat(self.range.end - self.range.start);
+            let pad_line_num = " ".repeat(format!("{}", self.source.line).len());
+            format!(" {} |\n {} | {}\n {} | \x1B[1;38;5;{}m{}{}{}\x1B[0m", pad_line_num, self.source.line, &self.full[start..end], pad_line_num, severity.color(), pad_start, highlight, pad_end)
+        } else {
+            format!("[formatting error: {}, {}] {:?} {:?}", start, end, &self.full[start..end], &self.full)
+        }
     }
     pub fn local(&self) -> LocalContext {
         LocalContext {

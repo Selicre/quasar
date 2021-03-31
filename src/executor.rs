@@ -10,6 +10,8 @@ use crate::message::Message;
 use crate::splitter::{self, Block};
 use crate::lexer::{self, Token, TokenKind};
 use crate::expr;
+use crate::assembler::Assembler;
+use crate::statement::Statement;
 
 pub struct Target {
     files: HashMap<Rc<str>, ParsedFile>,
@@ -44,12 +46,19 @@ impl Target {
     pub fn iter_messages(&self) -> impl Iterator<Item=&Message> + '_ {
         self.messages.iter()
     }
+    pub fn clear_messages(&mut self) {
+        self.messages.clear()
+    }
     pub fn has_error(&self) -> bool { self.has_error }
     pub fn defines(&self) -> &HashMap<String, Vec<Token>> { &self.defines }
     pub fn label_id(&mut self, label: expr::Label) -> usize {
         self.label_idx.insert_full(label).0
     }
-    pub fn set_label(&mut self, mut label: expr::Label, context: ContextStr) {
+    pub fn segment_label(&mut self, seg: usize) -> usize {
+        let (id, _) = self.label_idx.insert_full(expr::Label::Segment(seg));
+        id
+    }
+    pub fn set_label(&mut self, mut label: expr::Label, context: ContextStr) -> usize {
         match &mut label {
             expr::Label::Named { stack } => self.label_ctx.named = stack.clone(),
             expr::Label::AnonPos { depth, pos } => {
@@ -65,10 +74,12 @@ impl Target {
                 }
                 self.label_ctx.neg[*depth] += 1;
                 *pos = self.label_ctx.neg[*depth];
-            }
+            },
+            _ => {}
         }
         let (id, _) = self.label_idx.insert_full(label.clone());
         println!("set label {} to {:?}", id, label);
+        id
     }
     pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
         if depth > self.label_ctx.named.len() {
@@ -141,7 +152,7 @@ impl ExecCtx {
     }
 }
 
-pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target) {
+pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm: &mut Assembler) {
     let file = if let Some(c) = target.files.get(&filename) {
         c
     } else {
@@ -171,13 +182,13 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target) {
     while let Some((i, newline)) = file.stmt(ctx.exec_ptr) {
         let rep = ctx.rep_count.take().unwrap_or(1);
         for _ in 0..rep {
-            exec_stmt(i.clone(), newline, target, &mut ctx);
+            exec_stmt(i.clone(), newline, target, &mut ctx, asm);
         }
         ctx.exec_ptr += 1;
     }
 }
 
-fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCtx) {
+fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
     //println!("executing: {} at {}", i, i.source().short());
     let mut tokens = lexer::tokenize_stmt(i.clone(), target);
 
@@ -189,7 +200,7 @@ fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCt
             && op.is_symbol()
             && ws2.is_whitespace()) {
         // mostly for endifs to work properly
-        exec_cmd(&[], newline, target, ctx);
+        exec_cmd(&[], newline, target, ctx, asm);
         if !ctx.enabled() { return; }
         let mut exp_defines = false;
         let mut check_existing = false;
@@ -284,13 +295,13 @@ fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCt
         for i in 0..tokens.len().saturating_sub(2) {
             if tokens[i].is_whitespace() && &*tokens[i+1].span == ":" && tokens[i+2].is_whitespace() {
                 let mut t = &tokens[start..i];
-                exec_cmd(t, false, target, ctx);
+                exec_cmd(t, false, target, ctx, asm);
                 start = i + 2;
             }
         }
-        exec_cmd(&tokens[start..], newline, target, ctx);
+        exec_cmd(&tokens[start..], newline, target, ctx, asm);
     } else {
-        exec_cmd(&tokens, newline, target, ctx);
+        exec_cmd(&tokens, newline, target, ctx, asm);
     }
 }
 
@@ -378,10 +389,13 @@ impl<'a> TokenList<'a> {
     pub fn rest(&self) -> &'a [Token] {
         &self.inner[self.pos..]
     }
+    pub fn last(&self) -> Option<&'a Token> {
+        self.inner.last()
+    }
 }
 
 
-fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut ExecCtx) {
+fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
     print!("{} ", if ctx.enabled() { "+" } else { " " });
     for i in tokens.iter() {
         print!("{}", i.span);
@@ -398,7 +412,8 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
             if ate_colon { peek.next(); }
             if c.1.no_colon() || ate_colon {
                 tokens = peek;
-                target.set_label(c.1, c.0);
+                let id = target.set_label(c.1, c.0.clone());
+                asm.append(Statement::label(id, c.0), target);
                 continue;
             }
         }
@@ -555,11 +570,34 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
                 } else {
                     ""
                 };
-                exec_file(c.into(), cmd.span.clone(), target);
+                exec_file(c.into(), cmd.span.clone(), target, asm);
+            }
+            "db" | "dw" | "dl" | "dd" if ctx.enabled() => {
+                let size = match &*cmd.span { "db" => 1, "dw" => 2, "dl" => 3, "dd" => 4, _ => 0 };
+                loop {
+                    let c = expr::Expression::parse(&mut tokens, target);
+                    if c.is_empty() { break; }
+                    let stmt = Statement::data(c, size, cmd.span.clone());
+                    asm.append(stmt, target);
+                    match tokens.next_non_wsp() {
+                        Some(c) if &*c.span == "," => continue,
+                        None => break,
+                        Some(c) => {
+                            target.push_msg(Message::error(c.span.clone(), 0, format!("Unknown separator"))); break; 
+                        }
+                    }
+                }
+            }
+            "org" if ctx.enabled() => {
+                let c = expr::Expression::parse(&mut tokens, target);
+                asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
             }
             "print" if ctx.enabled() => {
-                let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
-                target.push_msg(Message::info(cmd.span.clone(), 0, c))
+                //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
+                //target.push_msg(Message::info(cmd.span.clone(), 0, c))
+                let c = expr::Expression::parse(&mut tokens, target);
+                let stmt = Statement::print(c, cmd.span.clone());
+                asm.append(stmt, target);
             }
             "expr" if ctx.enabled() => {
                 let c = expr::Expression::parse(&mut tokens, target);

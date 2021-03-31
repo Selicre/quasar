@@ -2,15 +2,16 @@
 use crate::context::ContextStr;
 use crate::executor::{TokenList,Target};
 use crate::lexer::TokenKind;
+use crate::assembler::Assembler;
 
 type Node = (ContextStr, ExprNode);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Expression {
     nodes: Vec<Node>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExprNode {
     Binop(Binop),
     Unop(Unop),
@@ -134,7 +135,7 @@ fn parse_binop(tokens: &mut TokenList<'_>) -> Option<Node> {
                 ">"  => Gt,
                 ">=" => Ge,
                 "<"  => Lt,
-                ">=" => Le,
+                "<=" => Le,
                 "&&" => And,
                 "||" => Or,
                 _ => return None
@@ -156,7 +157,7 @@ struct S {
 impl S {
     fn atom(node: Node) -> Self { Self { node, children: vec![] } }
     fn cons(node: Node, children: Vec<Self>) -> Self { Self { node, children } }
-    fn empty() -> Self { Self::atom((ContextStr::empty(), ExprNode::Empty)) }
+    fn empty(ctx: ContextStr) -> Self { Self::atom((ctx, ExprNode::Empty)) }
     fn is_empty(&self) -> bool { matches!(self.node.1, ExprNode::Empty) }
     fn to_vec(self, v: &mut Vec<Node>) {
         for i in self.children {
@@ -188,7 +189,7 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
     let next = if let Some(c) = tokens.peek_non_wsp() {
         c
     } else {
-        return Some(S::empty())
+        return Some(S::empty(tokens.last().map(|c| c.span.clone()).unwrap_or(ContextStr::empty())))
     };
     let mut peek = tokens.clone();
 
@@ -218,8 +219,8 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
         S::atom(lhs)
     } else if let Some(lhs) = parse_literal(tokens) {
         S::atom(lhs)
-    } else if &*next.span == ")" {
-        return Some(S::empty())
+    } else if &*next.span == ")" || &*next.span == "," {
+        return Some(S::empty(next.span.clone()))
     } else {
         target.push_error(next.span.clone(), 0, "Unknown unary operator".into());
         return None;
@@ -231,7 +232,7 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
             break;
         };
         let mut peek = tokens.clone();
-        let op = if &*next.span == ")" {
+        let op = if &*next.span == ")" || &*next.span == "," {
             break;
         } else if let Some(c) = parse_binop(&mut peek) {
             c
@@ -258,6 +259,16 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
 }
 
 impl Expression {
+    pub fn value(span: ContextStr, value: f64) -> Self {
+        Self { nodes: vec![(span, ExprNode::Value(Value::Literal { value, size_hint: 0 }))] }
+    }
+    pub fn label_offset(span: ContextStr, label: usize, value: f64) -> Self {
+        Self { nodes: vec![
+            (span.clone(), ExprNode::Value(Value::Label(label))),
+            (span.clone(), ExprNode::Value(Value::Literal { value, size_hint: 0 })),
+            (span, ExprNode::Binop(Binop::Add)),
+        ] }
+    }
     pub fn parse(tokens: &mut TokenList<'_>, target: &mut Target) -> Self {
         let s = parse_expr(tokens, 0, target);
         let mut nodes = vec![];
@@ -265,7 +276,74 @@ impl Expression {
             println!("{}", s);
             s.to_vec(&mut nodes);
         });
+        for i in nodes.iter() {
+            if matches!(i.1, ExprNode::Empty) {
+                target.push_error(i.0.clone(), 0, "Empty expression".into());
+                nodes.clear();
+                break;
+            }
+        }
         Self { nodes }
+    }
+    pub fn try_eval_stack(&self, target: &mut Target, asm: &Assembler, stack: &mut Vec<(ContextStr, Value)>, label_depth: &mut Vec<usize>) -> Option<()> {
+        println!("evaluating: {:?}", self);
+        let get_val = |arg: Value, span: &ContextStr, target: &mut Target| match arg {
+            Value::Literal { value, .. } => value,
+            Value::Label(_) => {
+                panic!("label encountered where it really should not be");
+            },
+            Value::String => {
+                target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
+                0.0
+            },
+            Value::Error => 0.0,
+        };
+        for (span, i) in self.nodes.iter() {
+            match i {
+                ExprNode::Value(Value::Label(c)) if label_depth.contains(&c) => {
+                    target.push_error(span.clone(), 0, "Self-referential label used".into());
+                    return None;
+                }
+                ExprNode::Value(Value::Label(c)) => {
+                    label_depth.push(*c);
+                    println!("getting label value {}", c);
+                    let expr = asm.get_label_value(*c)?;
+                    println!("got: {:?}", expr);
+                    expr.try_eval_stack(target, asm, stack, label_depth)?;
+                }
+                ExprNode::Value(v) => {
+                    stack.push((span.clone(), v.clone()));
+                }
+                ExprNode::Unop(op) => {
+                    let (span1, arg) = stack.pop().expect("unbalanced expr");
+                    let arg = get_val(arg, &span1, target);
+                    let value = op.exec(&span, arg, target);
+                    stack.push((span.clone(), Value::Literal { value, size_hint: 0 }));
+                }
+                ExprNode::Binop(op) => {
+                    let (span1, arg1) = stack.pop().expect("unbalanced expr");
+                    let arg1 = get_val(arg1, &span1, target);
+                    let (span2, arg2) = stack.pop().expect("unbalanced expr");
+                    let arg2 = get_val(arg2, &span2, target);
+                    let value = op.exec(&span, arg1, arg2, target);
+                    stack.push((span.clone(), Value::Literal { value, size_hint: 0 }));
+                }
+                ExprNode::Call(len) => {
+                    panic!()
+                }
+                _ => panic!()
+            }
+        }
+        Some(())
+    }
+    pub fn try_eval(&self, target: &mut Target, asm: &Assembler) -> Option<f64> {
+        let mut stack = vec![];
+        self.try_eval_stack(target, asm, &mut stack, &mut vec![])?;
+        let val = stack.pop().expect("unbalanced expr");
+        match val.1 {
+            Value::Literal { value, .. } => Some(value),
+            _ => panic!("uh oh")
+        }
     }
     pub fn eval_const(&self, target: &mut Target) -> f64 {
         let mut stack = vec![];
@@ -311,6 +389,9 @@ impl Expression {
         let val = stack.pop().expect("unbalanced expr");
         get_val(val.1, val.0, target)
     }
+    pub fn is_empty(&self) -> bool {
+        self.nodes.len() == 0
+    }
 }
 
 #[derive(Debug,Clone)]
@@ -334,6 +415,7 @@ pub enum Label {
     Named { stack: Vec<String> },
     AnonPos { depth: usize, pos: usize },
     AnonNeg { depth: usize, pos: usize },
+    Segment(usize)
 }
 impl Label {
     pub fn no_colon(&self) -> bool {
@@ -345,7 +427,7 @@ impl Label {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Binop {
     Add,
     Sub,
@@ -369,7 +451,7 @@ pub enum Binop {
     Or,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Unop {
     Unp,
     Unm,

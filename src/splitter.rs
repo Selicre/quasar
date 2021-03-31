@@ -46,6 +46,8 @@ fn split_lines(line: &mut ContextStr) -> Option<ContextStr> {
             line.advance(1);
             continue;
         }
+        // Eat empty lines
+        if (&*stmt).trim().len() == 0 { line.advance(1); continue; }
         break;
     }
     Some(line.prefix_from(needle))

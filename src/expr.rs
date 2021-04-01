@@ -163,6 +163,13 @@ impl S {
     fn cons(node: Node, children: Vec<Self>) -> Self { Self { node, children } }
     fn empty(ctx: ContextStr) -> Self { Self::atom((ctx, ExprNode::Empty)) }
     fn is_empty(&self) -> bool { matches!(self.node.1, ExprNode::Empty) }
+    fn is_ident(&self) -> Option<ContextStr> {
+        if self.children.len() == 0 {
+            Some(self.node.0.clone())
+        } else {
+            None
+        }
+    }
     fn to_vec(self, v: &mut Vec<Node>) {
         for i in self.children {
             i.to_vec(v);
@@ -238,6 +245,46 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
         let mut peek = tokens.clone();
         let op = if &*next.span == ")" || &*next.span == "," || &*next.span == "]" {
             break;
+        } else if &*next.span == "(" {
+            // fn call, process arguments
+            let _ = tokens.next_non_wsp();
+            let mut children = vec![];
+            let name = if let Some(c) = lhs.is_ident() {
+                c
+            } else {
+                target.push_error(next.span.clone(), 0, "Only idents can be called as a function".into());
+                return None;
+            };
+            loop {
+                match tokens.peek_non_wsp() {
+                    Some(c) if &*c.span == ")" => { tokens.next_non_wsp(); break },
+                    None => {
+                        target.push_error(next.span.clone(), 0, "Unclosed parenthesis".into());
+                        return None;
+                    },
+                    _ => {}
+                }
+                println!("tokens: {:?}", tokens.rest());
+                let arg = parse_expr(tokens, 0, target)?;
+                let comma = tokens.peek_non_wsp();
+                match comma {
+                    // TODO: unfuck this
+                    Some(c) if &*c.span == "," => { tokens.next_non_wsp(); },
+                    Some(c) if &*c.span == ")" => {},
+                    Some(c) => {
+                        target.push_error(c.span.clone(), 0, "Unexpected token".into());
+                        return None;
+                    },
+                    None => {
+                        target.push_error(next.span.clone(), 0, "Unclosed parenthesis".into());
+                        return None;
+                    },
+                }
+                println!("tokens: {:?}", tokens.rest());
+                children.push(arg)
+            }
+            lhs = S::cons((name, ExprNode::Call(children.len())), children);
+            continue;
         } else if let Some(c) = parse_binop(&mut peek) {
             c
         } else {
@@ -310,20 +357,38 @@ impl Expression {
             _ => None
         }).max()
     }
-    pub fn try_eval_stack(&self, target: &mut Target, asm: &Assembler, stack: &mut Vec<(ContextStr, Value)>, label_depth: &mut Vec<usize>) -> Option<()> {
+    pub fn try_eval_stack(
+        &self,
+        constexpr: bool,
+        target: &mut Target,
+        asm: &Assembler,
+        stack: &mut Vec<(ContextStr, Value)>,
+        label_depth: &mut Vec<usize>
+    ) -> Option<()> {
         println!("evaluating: {:?}", self);
-        let get_val = |arg: Value, span: &ContextStr, target: &mut Target| match arg {
-            Value::Literal { value, .. } => value,
-            Value::Label(_) => {
-                panic!("label encountered where it really should not be");
-            },
-            Value::String(_) => {
-                target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
-                0.0
-            },
+        let get_val = |stack: &mut Vec<(ContextStr, Value)>, target: &mut Target| {
+            let (span, arg) = stack.pop().expect("unbalanced expr");
+            match arg {
+                Value::Literal { value, .. } => value,
+                Value::Label(_) => {
+                    panic!("label found where it really shouldn't be");
+                },
+                Value::String(_) => {
+                    target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
+                    0.0
+                },
+            }
         };
         for (span, i) in self.nodes.iter() {
             match i {
+                ExprNode::Value(Value::Label(_)) if constexpr => {
+                    target.push_error(span.clone(), 34, "Labels are not allowed in const contexts".into());
+                    return None;
+                }
+                ExprNode::Value(v) if constexpr => {
+                    // Do not attempt to resolve labels
+                    stack.push((span.clone(), v.clone()));
+                }
                 ExprNode::Value(Value::Label(c)) if label_depth.contains(&c) => {
                     target.push_error(span.clone(), 0, "Self-referential label used".into());
                     return None;
@@ -332,43 +397,81 @@ impl Expression {
                     label_depth.push(*c);
                     println!("getting label value {}", c);
                     let expr = asm.get_label_value(*c)?;
-                    expr.try_eval_stack(target, asm, stack, label_depth)?;
+                    expr.try_eval_stack(constexpr, target, asm, stack, label_depth)?;
                     label_depth.pop();
                 }
                 ExprNode::Value(v) => {
                     stack.push((span.clone(), v.clone()));
                 }
                 ExprNode::Unop(op) => {
-                    let (span1, arg) = stack.pop().expect("unbalanced expr");
-                    let arg = get_val(arg, &span1, target);
+                    let arg = get_val(stack, target);
                     let value = op.exec(&span, arg, target);
                     stack.push((span.clone(), Value::Literal { value, size_hint: 0 }));
                 }
                 ExprNode::Binop(op) => {
-                    let (span1, arg1) = stack.pop().expect("unbalanced expr");
-                    let arg1 = get_val(arg1, &span1, target);
-                    let (span2, arg2) = stack.pop().expect("unbalanced expr");
-                    let arg2 = get_val(arg2, &span2, target);
-                    let value = op.exec(&span, arg2, arg1, target);
+                    let arg2 = get_val(stack, target);
+                    let arg1 = get_val(stack, target);
+                    let value = op.exec(&span, arg1, arg2, target);
                     stack.push((span.clone(), Value::Literal { value, size_hint: 0 }));
                 }
                 ExprNode::Call(len) => {
-                    panic!()
+                    macro_rules! arity {
+                        (@l $l:expr; $($dummy:expr),*) => {
+                            if $l != *len {
+                                target.push_error(span.clone(), 0, format!("Wrong number of function arguments (expected {}, found {})", $l, len));
+                                return None;
+                            } else {
+                                [$({ $dummy; get_val(stack, target) }),*]
+                            }
+                        };
+                        (1) => { arity!(@l 1; 0) };
+                        (2) => { arity!(@l 2; 0, 1) };
+                        (3) => { arity!(@l 3; 0, 1, 2) };
+                    }
+                    let value = match &**span {
+                        "not" => {
+                            let [arg] = arity!(1);
+                            Unop::Not.exec(&span, arg, target)
+                        }
+                        "min" => {
+                            let [arg2, arg1] = arity!(2);
+                            arg1.min(arg2)
+                        }
+                        "max" => {
+                            let [arg2, arg1] = arity!(2);
+                            arg1.max(arg2)
+                        }
+                        "select" => {
+                            let [arg3, arg2, arg1] = arity!(3);
+                            if arg1 != 0.0 { arg2 } else { arg3 }
+                        },
+                        /*"datasize" => {
+                            let label_name = stack.pop().expect("unbalanced expr");
+                            println!("datasize for: \"{}\"", label_name.0);
+                            let label_id = 
+                            asm.get_datasize(label_name).expect("no label for datasize?")
+                        },*/
+                        _ => {
+                            target.push_error(span.clone(), 0, format!("Unknown function"));
+                            return None;
+                        }
+                    };
+                    stack.push((span.clone(), Value::Literal { value, size_hint: 0 }));
                 }
                 _ => panic!()
             }
         }
         Some(())
     }
-    pub fn try_eval(&self, target: &mut Target, asm: &Assembler) -> Option<(ContextStr, Value)> {
+    pub fn try_eval(&self, constexpr: bool, target: &mut Target, asm: &Assembler) -> Option<(ContextStr, Value)> {
         let mut stack = vec![];
-        self.try_eval_stack(target, asm, &mut stack, &mut vec![])?;
+        self.try_eval_stack(constexpr, target, asm, &mut stack, &mut vec![])?;
         let val = stack.pop().expect("unbalanced expr");
         println!("value: {:?}", val);
         Some(val)
     }
     pub fn try_eval_float(&self, target: &mut Target, asm: &Assembler) -> Option<f64> {
-        let val = self.try_eval(target,asm)?;
+        let val = self.try_eval(false, target,asm)?;
         match val.1 {
             Value::Literal { value, .. } => Some(value),
             _ => {
@@ -383,48 +486,37 @@ impl Expression {
         Some(int_cast(val))
     }
     pub fn eval_const(&self, target: &mut Target) -> f64 {
-        let mut stack = vec![];
-
-        let get_val = |arg: Value, span: &ContextStr, target: &mut Target| match arg {
-            Value::Literal { value, .. } => value,
-            Value::Label(_) => {
-                target.push_error(span.clone(), 34, "Labels are not allowed in const contexts".into());
+        let val = self.try_eval(true, target, &Assembler::new());
+        match val {
+            Some((_, Value::Literal { value, .. })) => value,
+            Some((c,_)) => {
+                target.push_error(c, 0, "Expected an expression that returns a number".into());
                 0.0
             },
-            Value::String(_) => {
-                target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
-                0.0
-            },
-        };
-
-        for (span, i) in self.nodes.iter() {
-            match i {
-                ExprNode::Value(v) => {
-                    stack.push((span, v.clone()));
-                }
-                ExprNode::Unop(op) => {
-                    let (span1, arg) = stack.pop().expect("unbalanced expr");
-                    let arg = get_val(arg, &span1, target);
-                    let value = op.exec(&span, arg, target);
-                    stack.push((span, Value::Literal { value, size_hint: 0 }));
-                }
-                ExprNode::Binop(op) => {
-                    let (span1, arg1) = stack.pop().expect("unbalanced expr");
-                    let arg1 = get_val(arg1, &span1, target);
-                    let (span2, arg2) = stack.pop().expect("unbalanced expr");
-                    let arg2 = get_val(arg2, &span2, target);
-                    let value = op.exec(&span, arg2, arg1, target);
-                    stack.push((span, Value::Literal { value, size_hint: 0 }));
-                }
-                ExprNode::Call(len) => {
-                    panic!()
-                }
-                _ => panic!()
-            }
+            None => 0.0
         }
-        let val = stack.pop().expect("unbalanced expr");
-        get_val(val.1, val.0, target)
     }
+    /*pub fn eval_builtin(&self,
+        name: &ContextStr,
+        len: usize,
+        target: &mut Target,
+        asm: &Assembler,
+        stack: &mut Vec<(ContextStr, Value)>,
+        label_depth: &mut Vec<usize>
+    ) -> Option<()> {
+        let mut arity = |l| if l != len {
+            target.push_error(name.clone(), 0, format!("Wrong number of function arguments (expected {}, found {})", l, len));
+            None
+        } else { Some(()) };
+        match &**name {
+            "not" => {
+                arity(1)?;
+                let arg = 
+                panic!();
+            },
+            _ => panic!()
+        }
+    }*/
     pub fn is_empty(&self) -> bool {
         self.nodes.len() == 0
     }

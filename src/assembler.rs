@@ -50,6 +50,18 @@ impl Assembler {
             compare: vec![],
         }
     }
+    pub fn get_datasize(&self, label: usize) -> Option<f64> {
+        // todo: maybe backrefs to find labels?
+        for seg in self.segments.iter() {
+            if let Some(s) = seg.stmts.iter().position(|c| matches!(c.kind, StatementKind::Label(label))) {
+                let start = seg.stmts[s].offset;
+                let other = seg.stmts[s+1..].iter().find(|c| matches!(c.kind, StatementKind::Label(_)));
+                let end = other.unwrap_or(seg.stmts.last().unwrap()).offset;
+                return Some((end - start) as _)
+            }
+        }
+        return None;
+    }
     pub fn set_compare(&mut self, v: Vec<u8>) {
         self.compare = v;
     }
@@ -109,7 +121,7 @@ impl Assembler {
                 match &s.kind {
                     StatementKind::Print { expr } => {
                         println!("trying: {:?}", expr);
-                        println!("{:?}", expr.try_eval(target, self));
+                        println!("{:?}", expr.try_eval(false, target, self));
                     },
                     StatementKind::DataStr { data, size } => {
                         if *size == 1 {

@@ -38,15 +38,20 @@ impl Segment {
 
 pub struct Assembler {
     segments: Vec<Segment>,
-    labels: HashMap<usize, Expression>
+    labels: HashMap<usize, Expression>,
+    compare: Vec<u8>,
 }
 
 impl Assembler {
     pub fn new() -> Self {
         Self {
             segments: vec![],
-            labels: HashMap::new()
+            labels: HashMap::new(),
+            compare: vec![],
         }
+    }
+    pub fn set_compare(&mut self, v: Vec<u8>) {
+        self.compare = v;
     }
     pub fn new_segment(&mut self, span: ContextStr, s: StartKind, target: &mut Target) {
         let label_id = target.segment_label(self.segments.len());
@@ -93,7 +98,10 @@ impl Assembler {
             let offset = ((addr&0x7F0000)>>1|(addr&0x7FFF));
 
             w.seek(SeekFrom::Start(offset));
+            let mut offset = offset as usize;
             for s in i.stmts.iter() {
+                if offset != s.offset { panic!("uh oh wrong offset"); }
+                let mut written = vec![];
                 match &s.kind {
                     StatementKind::Print { expr } => {
                         println!("trying: {:?}", expr);
@@ -103,14 +111,56 @@ impl Assembler {
                         let val = expr.try_eval(target, self).unwrap() as u32;
                         let val = val.to_le_bytes();
                         w.write_all(&val[..s.size]).unwrap();
+                        written.write_all(&val[..s.size]).unwrap();
+                    },
+                    StatementKind::InstructionRel { opcode, expr } => {
+                        w.write_all(&[*opcode]).unwrap();
+                        written.write_all(&[*opcode]).unwrap();
+                        if s.size == 2 {
+                            let val = expr.try_eval(target, self).unwrap() as u32;
+                            let val = val.wrapping_sub(addr as u32 + s.offset as u32 + 2);
+                            let val = val.to_le_bytes();
+                            w.write_all(&val[..s.size-1]).unwrap();
+                            written.write_all(&val[..s.size-1]).unwrap();
+                        } else if s.size == 3 {
+                            let val = expr.try_eval(target, self).unwrap() as u32;
+                            let val = val.wrapping_sub(addr as u32 + s.offset as u32 + 3);
+                            let val = val.to_le_bytes();
+                            w.write_all(&val[..s.size-1]).unwrap();
+                            written.write_all(&val[..s.size-1]).unwrap();
+                        }
+                    },
+                    StatementKind::Instruction { opcode, expr } => {
+                        w.write_all(&[*opcode]).unwrap();
+                        written.write_all(&[*opcode]).unwrap();
+                        if s.size > 1 {
+                            let val = expr.try_eval(target, self).unwrap() as u32;
+                            let val = val.to_le_bytes();
+                            w.write_all(&val[..s.size-1]).unwrap();
+                            written.write_all(&val[..s.size-1]).unwrap();
+                        }
+                    },
+                    StatementKind::InstructionRep { opcode } => {
+                        for _ in 0..s.size {
+                            w.write_all(&[*opcode]).unwrap();
+                            written.write_all(&[*opcode]).unwrap();
+                        }
                     },
                     _ => {}
                 }
+                if self.compare.len() > 0 {
+                    let lhs = &written[..];
+                    let rhs = &self.compare[s.offset..s.offset+s.size];
+                    if lhs != rhs {
+                        //target.push_error(s.span.clone(), 0, format!("Test failed: {:02X?} != {:02X?}", lhs, rhs));
+                        println!("test failed: {:02X?} != {:02X?}", lhs, rhs);
+                    } else {
+                        println!("test passed: {:02X?} == {:02X?}", lhs, rhs);
+                    }
+                }
+                offset += s.size;
             }
         }
-    }
-    pub fn resolve_exprs(&mut self) {
-
     }
     pub fn get_label_value(&self, label: usize) -> Option<&Expression> {
         self.labels.get(&label)

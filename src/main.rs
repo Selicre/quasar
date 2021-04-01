@@ -6,14 +6,17 @@ mod lexer;
 mod expr;
 mod statement;
 mod assembler;
+mod instruction;
 
 use executor::Target;
 use assembler::Assembler;
 use context::ContextStr;
 
 fn main() {
+    //let mut compare = std::fs::read("compare.bin").unwrap();
     let mut target = Target::new();
     let mut asm = Assembler::new();
+    //asm.set_compare(compare);
     executor::exec_file("test.asm".into(), ContextStr::cli(), &mut target, &mut asm);
     for i in target.iter_messages() {
         println!("{}", i);

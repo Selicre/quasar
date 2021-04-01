@@ -232,3 +232,8 @@ impl std::ops::Deref for ContextStr {
         &self.full[self.range.clone()]
     }
 }
+/*impl std::cmp::PartialEq<str> for ContextStr {
+    fn eq(&self, other: &str) -> bool {
+        &*self == other
+    }
+}*/

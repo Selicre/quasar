@@ -40,6 +40,9 @@ impl Target {
         self.has_error = true;
         self.messages.push(Message::error(source, code, data));
     }
+    pub fn push_warning(&mut self, source: ContextStr, code: usize, data: String) {
+        self.messages.push(Message::warning(source, code, data));
+    }
     pub fn push_info(&mut self, source: ContextStr, code: usize, data: String) {
         self.messages.push(Message::info(source, code, data));
     }
@@ -77,7 +80,10 @@ impl Target {
             },
             _ => {}
         }
-        let (id, _) = self.label_idx.insert_full(label.clone());
+        let (id, c) = self.label_idx.insert_full(label.clone());
+        if !c {
+            self.push_error(context, 0, "Label redefinition".into());
+        }
         println!("set label {} to {:?}", id, label);
         id
     }
@@ -602,6 +608,11 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
             "expr" if ctx.enabled() => {
                 let c = expr::Expression::parse(&mut tokens, target);
                 target.push_msg(Message::info(cmd.span.clone(), 0, format!("{:?}", c)))
+            }
+            instr if instr.len() == 3 && ctx.enabled() => {
+                if let Some(stmt) = crate::instruction::parse(cmd, &mut tokens, target) {
+                    asm.append(stmt, target);
+                }
             }
             _ => {}
         }

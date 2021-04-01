@@ -16,6 +16,13 @@ pub enum StatementKind {
         opcode: u8,
         expr: Expression
     },
+    InstructionRel {
+        opcode: u8,
+        expr: Expression
+    },
+    InstructionRep {
+        opcode: u8
+    },
     Label(usize),
     LabelExpr {
         id: usize,
@@ -40,5 +47,14 @@ impl Statement {
     }
     pub fn label(data: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::Label(data), 0, span)
+    }
+    pub fn instruction(opcode: u8, expr: Expression, size: usize, span: ContextStr) -> Self {
+        Statement::new(StatementKind::Instruction { opcode, expr }, size, span)
+    }
+    pub fn instruction_rel(opcode: u8, expr: Expression, size: usize, span: ContextStr) -> Self {
+        Statement::new(StatementKind::InstructionRel { opcode, expr }, size, span)
+    }
+    pub fn instruction_rep(opcode: u8, size: usize, span: ContextStr) -> Self {
+        Statement::new(StatementKind::InstructionRep { opcode }, size, span)
     }
 }

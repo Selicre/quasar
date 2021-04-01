@@ -219,7 +219,7 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
         S::atom(lhs)
     } else if let Some(lhs) = parse_literal(tokens) {
         S::atom(lhs)
-    } else if &*next.span == ")" || &*next.span == "," {
+    } else if &*next.span == ")" || &*next.span == "," || &*next.span == "]" {
         return Some(S::empty(next.span.clone()))
     } else {
         target.push_error(next.span.clone(), 0, "Unknown unary operator".into());
@@ -232,7 +232,7 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
             break;
         };
         let mut peek = tokens.clone();
-        let op = if &*next.span == ")" || &*next.span == "," {
+        let op = if &*next.span == ")" || &*next.span == "," || &*next.span == "]" {
             break;
         } else if let Some(c) = parse_binop(&mut peek) {
             c
@@ -259,6 +259,9 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
 }
 
 impl Expression {
+    pub fn empty() -> Self {
+        Self { nodes: vec![] }
+    }
     pub fn value(span: ContextStr, value: f64) -> Self {
         Self { nodes: vec![(span, ExprNode::Value(Value::Literal { value, size_hint: 0 }))] }
     }
@@ -268,6 +271,12 @@ impl Expression {
             (span.clone(), ExprNode::Value(Value::Literal { value, size_hint: 0 })),
             (span, ExprNode::Binop(Binop::Add)),
         ] }
+    }
+    pub fn block_move(span: ContextStr, arg1: Expression, mut arg2: Expression) -> Self {
+        let mut nodes = arg1.nodes;
+        nodes.append(&mut arg2.nodes);
+        nodes.push((span, ExprNode::Binop(Binop::BlockMove)));
+        Self { nodes }
     }
     pub fn parse(tokens: &mut TokenList<'_>, target: &mut Target) -> Self {
         let s = parse_expr(tokens, 0, target);
@@ -285,8 +294,14 @@ impl Expression {
         }
         Self { nodes }
     }
+    pub fn size_hint(&self) -> Option<usize> {
+        self.nodes.iter().filter_map(|c| match c.1 {
+            ExprNode::Value(Value::Literal { size_hint, .. }) if size_hint > 0 => Some(size_hint),
+            _ => None
+        }).max()
+    }
     pub fn try_eval_stack(&self, target: &mut Target, asm: &Assembler, stack: &mut Vec<(ContextStr, Value)>, label_depth: &mut Vec<usize>) -> Option<()> {
-        println!("evaluating: {:?}", self);
+        //println!("evaluating: {:?}", self);
         let get_val = |arg: Value, span: &ContextStr, target: &mut Target| match arg {
             Value::Literal { value, .. } => value,
             Value::Label(_) => {
@@ -296,7 +311,6 @@ impl Expression {
                 target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
                 0.0
             },
-            Value::Error => 0.0,
         };
         for (span, i) in self.nodes.iter() {
             match i {
@@ -306,9 +320,9 @@ impl Expression {
                 }
                 ExprNode::Value(Value::Label(c)) => {
                     label_depth.push(*c);
-                    println!("getting label value {}", c);
+                    //println!("getting label value {}", c);
                     let expr = asm.get_label_value(*c)?;
-                    println!("got: {:?}", expr);
+                    //println!("got: {:?}", expr);
                     expr.try_eval_stack(target, asm, stack, label_depth)?;
                 }
                 ExprNode::Value(v) => {
@@ -358,7 +372,6 @@ impl Expression {
                 target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
                 0.0
             },
-            Value::Error => 0.0,
         };
 
         for (span, i) in self.nodes.iter() {
@@ -399,7 +412,6 @@ pub enum Value {
     Literal { value: f64, size_hint: usize },
     Label(usize),
     String,
-    Error
 }
 impl Value {
     pub fn is_truthy(&self) -> bool {
@@ -449,6 +461,8 @@ pub enum Binop {
     Le,
     And,
     Or,
+    // internal
+    BlockMove
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -470,7 +484,8 @@ impl Binop {
             Shl | Shr => (6,7),
             BitAnd | BitOr | BitXor => (4,5),
             Eq | Ne | Gt | Ge | Lt | Le => (2,3),
-            And | Or => (0,1)
+            And | Or => (0,1),
+            BlockMove => unreachable!(),
         }
     }
     fn exec(&self, span: &ContextStr, l: f64, r: f64, target: &mut Target) -> f64 {
@@ -507,6 +522,7 @@ impl Binop {
             Le => from_bool(l <= r),
             And =>from_bool((l != 0.0) && (r != 0.0)),
             Or => from_bool((l != 0.0) || (r != 0.0)),
+            BlockMove => (((li & 0xFF) << 8) | (ri & 0xFF)) as f64,
         }
     }
 }

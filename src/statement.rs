@@ -12,6 +12,10 @@ pub enum StatementKind {
     Data {
         expr: Expression
     },
+    DataStr {
+        data: String,
+        size: usize,
+    },
     Instruction {
         opcode: u8,
         expr: Expression
@@ -44,6 +48,10 @@ impl Statement {
     }
     pub fn data(expr: Expression, size: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::Data { expr }, size, span)
+    }
+    pub fn data_str(data: String, size: usize, span: ContextStr) -> Self {
+        let l = size * data.len();
+        Statement::new(StatementKind::DataStr { data, size }, l, span)
     }
     pub fn label(data: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::Label(data), 0, span)

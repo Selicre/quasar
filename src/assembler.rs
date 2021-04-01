@@ -76,7 +76,11 @@ impl Assembler {
         let stmt = seg.push(stmt);
         match &stmt.kind {
             StatementKind::Label(id) => {
-                self.labels.insert(*id, Expression::label_offset(stmt.span.clone(), label_id, stmt.offset as _));
+                if !self.labels.contains_key(id) {
+                    self.labels.insert(*id, Expression::label_offset(stmt.span.clone(), label_id, stmt.offset as _));
+                } else {
+                    target.push_error(stmt.span.clone(), 0, "Label redefinition".into());
+                }
             }
             _ => {},
         }
@@ -84,7 +88,7 @@ impl Assembler {
     pub fn write_to_file<W:Write+Seek>(&self, target: &mut Target, mut w: W) {
         for i in self.segments.iter() {
             let addr = match &i.start {
-                StartKind::Expression(e) => e.try_eval(target, self),
+                StartKind::Expression(e) => e.try_eval_int(target, self),
                 _ => panic!("internal error: freespace pointer not resolved yet")
             };
             let addr = if let Some(addr) = addr { addr as u64 } else { return; };
@@ -98,17 +102,23 @@ impl Assembler {
             let offset = ((addr&0x7F0000)>>1|(addr&0x7FFF));
 
             w.seek(SeekFrom::Start(offset));
-            let mut offset = offset as usize;
+            let mut offset = 0;
             for s in i.stmts.iter() {
-                if offset != s.offset { panic!("uh oh wrong offset"); }
+                if offset != s.offset { panic!("uh oh wrong offset: {} != {}", offset, s.offset); }
                 let mut written = vec![];
                 match &s.kind {
                     StatementKind::Print { expr } => {
                         println!("trying: {:?}", expr);
                         println!("{:?}", expr.try_eval(target, self));
                     },
+                    StatementKind::DataStr { data, size } => {
+                        if *size == 1 {
+                            w.write_all(data.as_bytes()).unwrap();
+                            written.write_all(data.as_bytes()).unwrap();
+                        }
+                    },
                     StatementKind::Data { expr } => {
-                        let val = expr.try_eval(target, self).unwrap() as u32;
+                        let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { return; };
                         let val = val.to_le_bytes();
                         w.write_all(&val[..s.size]).unwrap();
                         written.write_all(&val[..s.size]).unwrap();
@@ -116,25 +126,21 @@ impl Assembler {
                     StatementKind::InstructionRel { opcode, expr } => {
                         w.write_all(&[*opcode]).unwrap();
                         written.write_all(&[*opcode]).unwrap();
-                        if s.size == 2 {
-                            let val = expr.try_eval(target, self).unwrap() as u32;
-                            let val = val.wrapping_sub(addr as u32 + s.offset as u32 + 2);
-                            let val = val.to_le_bytes();
-                            w.write_all(&val[..s.size-1]).unwrap();
-                            written.write_all(&val[..s.size-1]).unwrap();
-                        } else if s.size == 3 {
-                            let val = expr.try_eval(target, self).unwrap() as u32;
-                            let val = val.wrapping_sub(addr as u32 + s.offset as u32 + 3);
-                            let val = val.to_le_bytes();
-                            w.write_all(&val[..s.size-1]).unwrap();
-                            written.write_all(&val[..s.size-1]).unwrap();
+                        let mut val = if let Some(c) = expr.try_eval_int(target, self) { c } else { return; };
+                        println!("rel val: {}", val);
+                        if expr.contains_label() {
+                            // actually make relative
+                            val = val.wrapping_sub(addr as u32 + s.offset as u32 + s.size as u32);
                         }
+                        let val = val.to_le_bytes();
+                        w.write_all(&val[..s.size-1]).unwrap();
+                        written.write_all(&val[..s.size-1]).unwrap();
                     },
                     StatementKind::Instruction { opcode, expr } => {
                         w.write_all(&[*opcode]).unwrap();
                         written.write_all(&[*opcode]).unwrap();
                         if s.size > 1 {
-                            let val = expr.try_eval(target, self).unwrap() as u32;
+                            let val = expr.try_eval_int(target, self).unwrap();
                             let val = val.to_le_bytes();
                             w.write_all(&val[..s.size-1]).unwrap();
                             written.write_all(&val[..s.size-1]).unwrap();

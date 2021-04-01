@@ -20,7 +20,7 @@ pub enum ExprNode {
     Empty
 }
 
-fn parse_literal(tokens: &mut TokenList<'_>) -> Option<Node> {
+fn parse_literal(tokens: &mut TokenList<'_>, target: &mut Target) -> Option<Node> {
     let mut peek = tokens.clone();
     let t = peek.next_non_wsp()?;
     let t = match t.kind {
@@ -34,6 +34,10 @@ fn parse_literal(tokens: &mut TokenList<'_>) -> Option<Node> {
                 }
             });
             (t.span.clone(), val)
+        }
+        TokenKind::String => {
+            let exp = crate::lexer::expand_str(t.span.clone(), target)?;
+            (t.span.clone(), ExprNode::Value(Value::String(exp)))
         }
         _ => return None
     };
@@ -124,8 +128,8 @@ fn parse_binop(tokens: &mut TokenList<'_>) -> Option<Node> {
                 "*"  => Mul,
                 "/"  => Div,
                 "%"  => Mod,
-                ">>" => Shl,
-                "<<" => Shr,
+                "<<" => Shl,
+                ">>" => Shr,
                 "&"  => BitAnd,
                 "|"  => BitOr,
                 "^"  => BitXor,
@@ -217,7 +221,7 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
         }
     } else if let Some(lhs) = parse_ident(tokens, false, target) {
         S::atom(lhs)
-    } else if let Some(lhs) = parse_literal(tokens) {
+    } else if let Some(lhs) = parse_literal(tokens, target) {
         S::atom(lhs)
     } else if &*next.span == ")" || &*next.span == "," || &*next.span == "]" {
         return Some(S::empty(next.span.clone()))
@@ -294,6 +298,12 @@ impl Expression {
         }
         Self { nodes }
     }
+    pub fn contains_label(&self) -> bool {
+        self.nodes.iter().any(|c| matches!(
+            c.1,
+            ExprNode::Value(Value::Label(_))
+        ))
+    }
     pub fn size_hint(&self) -> Option<usize> {
         self.nodes.iter().filter_map(|c| match c.1 {
             ExprNode::Value(Value::Literal { size_hint, .. }) if size_hint > 0 => Some(size_hint),
@@ -301,13 +311,13 @@ impl Expression {
         }).max()
     }
     pub fn try_eval_stack(&self, target: &mut Target, asm: &Assembler, stack: &mut Vec<(ContextStr, Value)>, label_depth: &mut Vec<usize>) -> Option<()> {
-        //println!("evaluating: {:?}", self);
+        println!("evaluating: {:?}", self);
         let get_val = |arg: Value, span: &ContextStr, target: &mut Target| match arg {
             Value::Literal { value, .. } => value,
             Value::Label(_) => {
                 panic!("label encountered where it really should not be");
             },
-            Value::String => {
+            Value::String(_) => {
                 target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
                 0.0
             },
@@ -320,10 +330,10 @@ impl Expression {
                 }
                 ExprNode::Value(Value::Label(c)) => {
                     label_depth.push(*c);
-                    //println!("getting label value {}", c);
+                    println!("getting label value {}", c);
                     let expr = asm.get_label_value(*c)?;
-                    //println!("got: {:?}", expr);
                     expr.try_eval_stack(target, asm, stack, label_depth)?;
+                    label_depth.pop();
                 }
                 ExprNode::Value(v) => {
                     stack.push((span.clone(), v.clone()));
@@ -339,7 +349,7 @@ impl Expression {
                     let arg1 = get_val(arg1, &span1, target);
                     let (span2, arg2) = stack.pop().expect("unbalanced expr");
                     let arg2 = get_val(arg2, &span2, target);
-                    let value = op.exec(&span, arg1, arg2, target);
+                    let value = op.exec(&span, arg2, arg1, target);
                     stack.push((span.clone(), Value::Literal { value, size_hint: 0 }));
                 }
                 ExprNode::Call(len) => {
@@ -350,14 +360,27 @@ impl Expression {
         }
         Some(())
     }
-    pub fn try_eval(&self, target: &mut Target, asm: &Assembler) -> Option<f64> {
+    pub fn try_eval(&self, target: &mut Target, asm: &Assembler) -> Option<(ContextStr, Value)> {
         let mut stack = vec![];
         self.try_eval_stack(target, asm, &mut stack, &mut vec![])?;
         let val = stack.pop().expect("unbalanced expr");
+        println!("value: {:?}", val);
+        Some(val)
+    }
+    pub fn try_eval_float(&self, target: &mut Target, asm: &Assembler) -> Option<f64> {
+        let val = self.try_eval(target,asm)?;
         match val.1 {
             Value::Literal { value, .. } => Some(value),
-            _ => panic!("uh oh")
+            _ => {
+                target.push_error(val.0, 0, "Expected an expression that returns a number".into());
+                None
+            }
         }
+    }
+    pub fn try_eval_int(&self, target: &mut Target, asm: &Assembler) -> Option<u32> {
+        // see asar's getnum
+        let val = self.try_eval_float(target, asm)?;
+        Some(int_cast(val))
     }
     pub fn eval_const(&self, target: &mut Target) -> f64 {
         let mut stack = vec![];
@@ -368,7 +391,7 @@ impl Expression {
                 target.push_error(span.clone(), 34, "Labels are not allowed in const contexts".into());
                 0.0
             },
-            Value::String => {
+            Value::String(_) => {
                 target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
                 0.0
             },
@@ -390,7 +413,7 @@ impl Expression {
                     let arg1 = get_val(arg1, &span1, target);
                     let (span2, arg2) = stack.pop().expect("unbalanced expr");
                     let arg2 = get_val(arg2, &span2, target);
-                    let value = op.exec(&span, arg1, arg2, target);
+                    let value = op.exec(&span, arg2, arg1, target);
                     stack.push((span, Value::Literal { value, size_hint: 0 }));
                 }
                 ExprNode::Call(len) => {
@@ -407,11 +430,27 @@ impl Expression {
     }
 }
 
+pub fn int_cast(val: f64) -> u32 {
+    if val >= 0.0 {
+        if val > u32::MAX as f64 {
+            u32::MAX
+        } else {
+            val as u32
+        }
+    } else {
+        if -val > u32::MAX as f64 {
+            i32::MAX as u32 + 1
+        } else {
+            (!((-val) as u32)) + 1
+        }
+    }
+}
+
 #[derive(Debug,Clone)]
 pub enum Value {
     Literal { value: f64, size_hint: usize },
     Label(usize),
-    String,
+    String(String),
 }
 impl Value {
     pub fn is_truthy(&self) -> bool {

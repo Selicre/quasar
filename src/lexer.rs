@@ -39,7 +39,7 @@ impl Token {
     pub fn is_decimal(&self) -> bool {
         matches!(self.kind, TokenKind::Number { radix: 10, .. })
     }
-    pub fn as_number(&self) -> Option<i32> {
+    pub fn as_number(&self) -> Option<i64> {
         match self.kind {
             TokenKind::Number { value, .. } => Some(value),
             _ => None
@@ -59,12 +59,18 @@ impl Token {
             None
         }
     }
+    pub fn from_number(src: ContextStr, value: i64) -> Self {
+        Token {
+            span: src,
+            kind: TokenKind::Number { value, length: 0, radix: 10 }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum TokenKind {
     Number {        // $1234 or 1234
-        value: i32,
+        value: i64,
         length: usize,
         radix: i32
     },
@@ -102,20 +108,20 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
                 num = input.advance_some(input.find(|c| !is_number(c)));
                 radix = 10;
             }
-            let mut value = 0i32;
+            let mut value = 0i64;
             let mut overflowed = false;
             // todo: not garbage?
             for i in num.chars() {
-                let (v,b) = value.overflowing_mul(radix);
+                let (v,b) = value.overflowing_mul(radix as i64);
                 overflowed |= b;
                 value = v;
-                let (v,b) = value.overflowing_add(i.to_digit(radix as u32).unwrap() as i32);
+                let (v,b) = value.overflowing_add(i.to_digit(radix as u32).unwrap() as i64);
                 overflowed |= b;
                 value = v;
             }
             let span = input.prefix_from(needle);
             if overflowed {
-                target.push_error(span.clone(), 3, format!("Number overflows a 32-bit value"));
+                target.push_error(span.clone(), 3, format!("Number overflows a 64-bit value"));
             }
             if num.len() == 0 {
                 out.push(Token { span, kind: TokenKind::Symbol });
@@ -256,4 +262,18 @@ pub fn expand_str(mut input: ContextStr, target: &mut Target) -> Option<String> 
         }
     }
     Some(out)
+}
+// Assumes the string has already been expanded, thus no error handling
+pub fn display_str(input: &str) -> String {
+    let mut out = String::new();
+    let mut iter = input[1..input.len()-1].chars();
+    while let Some(c) = iter.next() {
+        if c == '\\' {
+            let c = iter.next().expect("uh oh");
+            out.push(c);
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }

@@ -39,8 +39,15 @@ pub fn split_file(mut file: ContextStr, target: &mut Target) -> Vec<Block> {
 
 fn split_lines(line: &mut ContextStr) -> Option<ContextStr> {
     let needle = line.needle();
-    loop {
-        let next_line = line.find("\n")?;
+    for i in 0.. {
+        let next_line = if let Some(l) = line.find("\n") { l } else {
+            if i == 0 {
+                return None;
+            } else {
+                line.advance(line.len());
+                break;
+            }
+        };
         let stmt = line.advance(next_line);
         if stmt.ends_with("\\") || stmt.ends_with(",") {
             line.advance(1);

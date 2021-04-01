@@ -80,10 +80,7 @@ impl Target {
             },
             _ => {}
         }
-        let (id, c) = self.label_idx.insert_full(label.clone());
-        if !c {
-            self.push_error(context, 0, "Label redefinition".into());
-        }
+        let (id, _) = self.label_idx.insert_full(label.clone());
         println!("set label {} to {:?}", id, label);
         id
     }
@@ -211,12 +208,13 @@ fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCt
         let mut exp_defines = false;
         let mut check_existing = false;
         let mut append = false;
+        let mut do_math = false;
         match &*tokens[2].span {
             "=" => {},
             ":=" => exp_defines = true,
             "?=" => check_existing = true,
             "+=" => append = true,
-            "#=" => exp_defines = true,
+            "#=" => { do_math = true; exp_defines = true; },
             _ => {
                 target.push_error(tokens[2].span.clone(), 9, format!("Unknown define operator"));
                 return;
@@ -236,9 +234,16 @@ fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCt
             v = tokens[4..].to_vec();
         }
 
-        if exp_defines { expand_defines(&mut v, &i, target); }
-
         let name = tokens[0].as_define().unwrap();
+        if exp_defines { expand_defines(&mut v, &i, target); }
+        if do_math {
+            let mut t = TokenList::new(&v);
+            let expr = expr::Expression::parse(&mut t, target);
+            let value = expr.eval_const(target);
+            target.defines.insert(name.to_string(), vec![Token::from_number(tokens[0].span.clone(), value as _)]);
+            return;
+        }
+
         let name = if tokens[0].is_define_escaped().unwrap() {
             if let Some(c) = lexer::expand_str(name, target) { c } else { return; }
         } else {
@@ -259,14 +264,14 @@ fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCt
     }
     let expanded = expand_defines(&mut tokens, &i, target);
 
-    for i in tokens.iter_mut() {
+    /*for i in tokens.iter_mut() {
         if let Some(c) = i.as_string_mut() {
             c.advance(1);
             c.cut(1);
             let out = format!("\"{}\"", lexer::expand_str(c.clone(), target).unwrap_or("".into()));
             i.span = ContextStr::new(out, i.span.source().clone());
         }
-    }
+    }*/
     if expanded {
         // Glue tokens
         let mut cur = 0;
@@ -456,6 +461,7 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
                     if ctx.enabled() {
                         let expr = expr::Expression::parse(&mut tokens, target);
                         let val = expr.eval_const(target);
+                        println!("while cond: {}", val);
                         if val == 0.0 {
                             ctx.if_depth = Some(ctx.if_stack.len());
                         }
@@ -581,10 +587,18 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
             "db" | "dw" | "dl" | "dd" if ctx.enabled() => {
                 let size = match &*cmd.span { "db" => 1, "dw" => 2, "dl" => 3, "dd" => 4, _ => 0 };
                 loop {
-                    let c = expr::Expression::parse(&mut tokens, target);
-                    if c.is_empty() { break; }
-                    let stmt = Statement::data(c, size, cmd.span.clone());
-                    asm.append(stmt, target);
+                    if tokens.peek_non_wsp().map(|c| c.is_string()).unwrap_or(false) {
+                        let s = tokens.next_non_wsp().unwrap();
+                        let c = lexer::expand_str(s.span.clone(), target).unwrap_or("".into());
+                        let c = lexer::display_str(&c);
+                        let stmt = Statement::data_str(c, size, cmd.span.clone());
+                        asm.append(stmt, target);
+                    } else {
+                        let c = expr::Expression::parse(&mut tokens, target);
+                        if c.is_empty() { break; }
+                        let stmt = Statement::data(c, size, cmd.span.clone());
+                        asm.append(stmt, target);
+                    }
                     match tokens.next_non_wsp() {
                         Some(c) if &*c.span == "," => continue,
                         None => break,

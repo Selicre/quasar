@@ -15,8 +15,9 @@ pub struct Expression {
 pub enum ExprNode {
     Binop(Binop),
     Unop(Unop),
-    Call(usize),
+    Call(usize, ContextStr),
     Value(Value),
+    FuncArg(usize),
     Empty
 }
 
@@ -283,7 +284,7 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
                 //println!("tokens: {:?}", tokens.rest());
                 children.push(arg)
             }
-            lhs = S::cons((name, ExprNode::Call(children.len())), children);
+            lhs = S::cons((name.clone(), ExprNode::Call(children.len(), name)), children);
             continue;
         } else if let Some(c) = parse_binop(&mut peek) {
             c
@@ -345,6 +346,36 @@ impl Expression {
         }
         Self { nodes }
     }
+    pub fn parse_fn_body(arguments: &[String], tokens: &mut TokenList<'_>, target: &mut Target) -> Self {
+        let s = parse_expr(tokens, 0, target);
+        let mut nodes = vec![];
+        s.map(|s| {
+            //println!("{}", s);
+            s.to_vec(&mut nodes);
+        });
+        for i in nodes.iter_mut() {
+            match i.1 {
+                ExprNode::Empty => {
+                    target.push_error(i.0.clone(), 0, "Empty expression".into());
+                    nodes.clear();
+                    break;
+                },
+                ExprNode::Value(Value::Label(c)) => {
+                    // replace arguments
+                    // this isn't as clean as I'd hope it would be but it is not invasive
+                    if let Some(Label::Named { stack }) = target.label_name(c) {
+                        if stack.len() == 1 {
+                            if let Some(c) = arguments.iter().position(|c| &stack[0] == c) {
+                                i.1 = ExprNode::FuncArg(c);
+                            }
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+        Self { nodes }
+    }
     pub fn contains_label(&self) -> bool {
         self.nodes.iter().any(|c| matches!(
             c.1,
@@ -363,6 +394,7 @@ impl Expression {
         target: &mut Target,
         asm: &Assembler,
         stack: &mut Vec<(ContextStr, StackValue)>,
+        args: &[(ContextStr, StackValue)],
         label_depth: &mut Vec<usize>
     ) -> Option<()> {
         //println!("evaluating: {:?}", self);
@@ -401,7 +433,7 @@ impl Expression {
                     if expr.is_none() {
                         target.push_error(span.clone(), 0, "Can't find label".into());
                     }
-                    expr?.try_eval_stack(constexpr, target, asm, stack, label_depth)?;
+                    expr?.try_eval_stack(constexpr, target, asm, stack, &[], label_depth)?;
                     label_depth.pop();
                     stack.last_mut().unwrap().1.set_origin(*c);
                 }
@@ -424,7 +456,31 @@ impl Expression {
                     let value = op.exec(&span, arg1, arg2, target);
                     stack.push((span.clone(), StackValue::Number { value, origin: None }));
                 }
-                ExprNode::Call(len) => {
+                ExprNode::FuncArg(f) => {
+                    stack.push((span.clone(), args[*f].1.clone()));
+                }
+                // I really do not want to increase the indent on the builtins lol
+                ExprNode::Call(len, name) if target.function(&name).is_some() => {
+                    let (arity, expr) = target.function(&name).unwrap();
+                    let arity = *arity;
+                    if *len != arity {
+                        target.push_error(span.clone(), 0, format!("Wrong number of function arguments (expected {}, found {})", arity, len));
+                        return None;
+                    }
+                    let mut args = vec![];
+                    for i in 0..*len { args.insert(0, stack.pop().unwrap()) }
+                    let mut expr = expr.clone();
+                    // adjust span info (otherwise errors go to the function def, which is not what
+                    // you want)
+                    for i in expr.nodes.iter_mut() {
+                        println!("{} -> {} [{:?}]", i.0, span, span.parent());
+                        i.0.to_child_of(span.clone());
+                    }
+                    println!("---");
+                    expr.try_eval_stack(constexpr, target, asm, stack, &args[..], label_depth)?;
+                }
+                ExprNode::Call(len, name) => {
+                    // do builtins
                     macro_rules! arity {
                         (@l $l:expr; $($dummy:expr),*) => {
                             if $l != *len {
@@ -438,38 +494,48 @@ impl Expression {
                         (2) => { arity!(@l 2; 0, 1) };
                         (3) => { arity!(@l 3; 0, 1, 2) };
                     }
-                    let value = match &**span {
-                        "not" => {
-                            let [arg] = arity!(1);
-                            Unop::Not.exec(&span, arg, target)
-                        }
-                        "min" => {
-                            let [arg2, arg1] = arity!(2);
-                            arg1.min(arg2)
-                        }
-                        "max" => {
-                            let [arg2, arg1] = arity!(2);
-                            arg1.max(arg2)
-                        }
-                        "select" => {
-                            let [arg3, arg2, arg1] = arity!(3);
-                            if arg1 != 0.0 { arg2 } else { arg3 }
-                        },
+                    let number = |value| StackValue::Number { value, origin: None };
+                    macro_rules! func {
+                        (|$a0:ident| $b:expr) => {{ let [$a0] = arity!(1); number($b) }};
+                        (|$a0:ident, $a1:ident| $b:expr) => {{ let [$a1,$a0] = arity!(2); number($b) }};
+                        (|$a0:ident, $a1:ident, $a2:ident| $b:expr) => {{ let [$a2,$a1,$a0] = arity!(3); number($b) }};
+                    }
+                    let value = match &**name {
+                        "not" => func! { |a| Unop::Not.exec(&span, a, target) },
+                        "min" => func! { |a,b| a.min(b) },
+                        "max" => func! { |a,b| a.max(b) },
+                        "select" => func! { |cond,a,b| if cond != 0.0 { a } else { b } },
                         "datasize" => {
                             let label_name = stack.pop().expect("unbalanced expr");
                             if let StackValue::Number { origin: Some(c), .. } = label_name.1 {
-                                asm.get_datasize(c, span.clone(), target).expect("no label for datasize?")
+                                number(asm.get_datasize(c, span.clone(), target).expect("no label for datasize?"))
                             } else {
                                 target.push_error(span.clone(), 0, "This function expects a symbol, not an expression".into());
                                 return None;
                             }
+                        },
+                        "hex" => {
+                            let [arg1] = arity!(1);
+                            StackValue::String(format!("{:X}", arg1 as i64))
+                        },
+                        "dec" => {
+                            let [arg1] = arity!(1);
+                            StackValue::String(format!("{}", arg1 as i64))
+                        },
+                        "bin" => {
+                            let [arg1] = arity!(1);
+                            StackValue::String(format!("{:b}", arg1 as i64))
+                        },
+                        "double" => {
+                            let [arg1] = arity!(1);
+                            StackValue::String(format!("{}", arg1))
                         },
                         _ => {
                             target.push_error(span.clone(), 0, format!("Unknown function"));
                             return None;
                         }
                     };
-                    stack.push((span.clone(), StackValue::Number { value, origin: None }));
+                    stack.push((span.clone(), value));
                 }
                 _ => panic!()
             }
@@ -478,7 +544,7 @@ impl Expression {
     }
     pub fn try_eval(&self, constexpr: bool, target: &mut Target, asm: &Assembler) -> Option<(ContextStr, StackValue)> {
         let mut stack = vec![];
-        self.try_eval_stack(constexpr, target, asm, &mut stack, &mut vec![])?;
+        self.try_eval_stack(constexpr, target, asm, &mut stack, &[], &mut vec![])?;
         let val = stack.pop().expect("unbalanced expr");
         //println!("value: {:?}", val);
         Some(val)

@@ -17,6 +17,7 @@ pub struct Target {
     files: HashMap<Rc<str>, ParsedFile>,
     messages: Vec<Message>,
     defines: HashMap<String, Vec<Token>>,
+    functions: HashMap<String, (usize, expr::Expression)>,
     label_idx: IndexSet<expr::Label>,
     label_ctx: LabelCtx,
     has_error: bool,
@@ -28,6 +29,7 @@ impl Target {
             files: HashMap::new(),
             messages: vec![],
             defines: HashMap::new(),
+            functions: HashMap::new(),
             label_idx: IndexSet::new(),
             label_ctx: LabelCtx::default(),
             has_error: false,
@@ -62,9 +64,19 @@ impl Target {
     pub fn label_id(&mut self, label: expr::Label) -> usize {
         self.label_idx.insert_full(label).0
     }
+    pub fn label_name(&mut self, id: usize) -> Option<&expr::Label> {
+        self.label_idx.get_index(id)
+    }
     pub fn segment_label(&mut self, seg: usize) -> usize {
         let (id, _) = self.label_idx.insert_full(expr::Label::Segment(seg));
         id
+    }
+    pub fn add_function(&mut self, name: String, arity: usize, expr: expr::Expression) {
+        let c = self.functions.insert(name, (arity, expr));
+        if c.is_some() { panic!(); }
+    }
+    pub fn function(&mut self, name: &str) -> Option<&(usize, expr::Expression)> {
+        self.functions.get(name)
     }
     pub fn set_label(&mut self, mut label: expr::Label, context: ContextStr) -> usize {
         match &mut label {
@@ -272,15 +284,6 @@ fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCt
         return;
     }
     let expanded = expand_defines(&mut tokens, &i, target);
-
-    /*for i in tokens.iter_mut() {
-        if let Some(c) = i.as_string_mut() {
-            c.advance(1);
-            c.cut(1);
-            let out = format!("\"{}\"", lexer::expand_str(c.clone(), target).unwrap_or("".into()));
-            i.span = ContextStr::new(out, i.span.source().clone());
-        }
-    }*/
     if expanded {
         // Glue tokens
         let mut cur = 0;
@@ -448,6 +451,14 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
         ctx.run_endif();
     }
     let cmd = if let Some(c) = tokens.next_non_wsp() { c } else { return; };
+
+    if matches!(tokens.peek_non_wsp(), Some(c) if &*c.span == "=") {
+        tokens.next_non_wsp();
+        let id = target.label_id(expr::Label::Named { stack: vec![cmd.span.to_string()] });
+        let expr = expr::Expression::parse(&mut tokens, target);
+        asm.set_label(id, expr, cmd.span.clone(), target);
+    }
+
     if cmd.is_ident() {
         match &*cmd.span {
             "if" => {
@@ -568,6 +579,34 @@ fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut 
                     return;
                 }
                 ctx.run_endif();
+            }
+            "function" if ctx.enabled() => {
+                let name = if let Some(n) = tokens.next_non_wsp() { n } else {
+                    target.push_msg(Message::error(cmd.span.clone(), 0, format!("`function` statement with no function name"))
+                        .with_help(format!("add a function name and body, like `function test(a) = a+2`")));
+                    return;
+                };
+                let paren = tokens.next_non_wsp().unwrap(); // TODO: handle later
+                assert_eq!(&*paren.span, "(");
+                let mut args = vec![];
+                if &*tokens.peek_non_wsp().unwrap().span != ")" { loop {
+                    let arg = tokens.next_non_wsp().unwrap();
+                    if !arg.is_ident() { panic!(); }
+                    args.push(arg.span.to_string());
+                    match tokens.next_non_wsp() {
+                        Some(c) if &*c.span == "," => continue,
+                        Some(c) if &*c.span == ")" => break,
+                        None => panic!(),
+                        Some(c) => {
+                            target.push_msg(Message::error(c.span.clone(), 0, format!("Unknown separator")));
+                            return;
+                        }
+                    }
+                } } else { tokens.next_non_wsp(); }
+                let eq = tokens.next_non_wsp().unwrap();
+                assert_eq!(&*eq.span, "=");
+                let expr = expr::Expression::parse_fn_body(&args, &mut tokens, target);
+                target.add_function(name.span.to_string(), args.len(), expr);
             }
             "rep" if ctx.enabled() => {
                 if tokens.peek_non_wsp().is_none() {

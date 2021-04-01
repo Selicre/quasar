@@ -89,6 +89,10 @@ impl ContextStr {
         ContextStr { full, source, range, parent: None }
     }
     pub fn set_parent(&mut self, parent: ContextStr) { self.parent = Some(Box::new(parent)); }
+    pub fn to_child_of(&mut self, mut parent: ContextStr) {
+        std::mem::swap(self, &mut parent);
+        self.set_parent(parent);
+    }
     pub fn parent(&self) -> Option<&ContextStr> {
         self.parent.as_deref()
     }

@@ -91,13 +91,19 @@ impl Assembler {
         let stmt = seg.push(stmt);
         match &stmt.kind {
             StatementKind::Label(id) => {
-                if !self.labels.contains_key(id) {
-                    self.labels.insert(*id, Expression::label_offset(stmt.span.clone(), label_id, stmt.offset as _));
-                } else {
-                    target.push_error(stmt.span.clone(), 0, "Label redefinition".into());
-                }
+                let expr = Expression::label_offset(stmt.span.clone(), label_id, stmt.offset as _);
+                let span = stmt.span.clone();
+                let id = *id;
+                self.set_label(id, expr, span, target);
             }
             _ => {},
+        }
+    }
+    pub fn set_label(&mut self, id: usize, expr: Expression, span: ContextStr, target: &mut Target) {
+        if !self.labels.contains_key(&id) {
+            self.labels.insert(id, expr);
+        } else {
+            target.push_error(span, 0, "Label redefinition".into());
         }
     }
     pub fn write_to_file<W:Write+Seek>(&self, target: &mut Target, mut w: W) -> Option<()> {

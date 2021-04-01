@@ -13,11 +13,12 @@ use assembler::Assembler;
 use context::ContextStr;
 
 fn main() {
+    let arg = std::env::args().nth(1).expect("args pls");
     //let mut compare = std::fs::read("compare.bin").unwrap();
     let mut target = Target::new();
     let mut asm = Assembler::new();
     //asm.set_compare(compare);
-    executor::exec_file("test.asm".into(), ContextStr::cli(), &mut target, &mut asm);
+    executor::exec_file(arg.into(), ContextStr::cli(), &mut target, &mut asm);
     for i in target.iter_messages() {
         println!("{}", i);
     }

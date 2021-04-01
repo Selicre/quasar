@@ -20,6 +20,7 @@ pub struct Target {
     label_idx: IndexSet<expr::Label>,
     label_ctx: LabelCtx,
     has_error: bool,
+    profiler: std::time::Instant,
 }
 impl Target {
     pub fn new() -> Self {
@@ -30,7 +31,11 @@ impl Target {
             label_idx: IndexSet::new(),
             label_ctx: LabelCtx::default(),
             has_error: false,
+            profiler: std::time::Instant::now()
         }
+    }
+    pub fn profiler(&self, msg: &str) {
+        eprintln!("[{:>6}µs] {}", self.profiler.elapsed().as_micros(), msg);
     }
     pub fn push_msg(&mut self, msg: Message) {
         self.has_error |= msg.is_error();
@@ -81,7 +86,7 @@ impl Target {
             _ => {}
         }
         let (id, _) = self.label_idx.insert_full(label.clone());
-        println!("set label {} to {:?}", id, label);
+        //println!("set label {} to {:?}", id, label);
         id
     }
     pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
@@ -156,6 +161,8 @@ impl ExecCtx {
 }
 
 pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm: &mut Assembler) {
+    let ff = filename.clone();
+    target.profiler(&format!("executing {}", ff));
     let file = if let Some(c) = target.files.get(&filename) {
         c
     } else {
@@ -180,6 +187,7 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
             data: file, stmts, filename
         })
     }.clone();
+    target.profiler(&format!("split {}", ff));
 
     let mut ctx = ExecCtx::default();
     while let Some((i, newline)) = file.stmt(ctx.exec_ptr) {
@@ -189,6 +197,7 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
         }
         ctx.exec_ptr += 1;
     }
+    target.profiler(&format!("done {}", ff));
 }
 
 fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
@@ -407,11 +416,13 @@ impl<'a> TokenList<'a> {
 
 
 fn exec_cmd(mut tokens: &[Token], newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
+    /*
     print!("{} ", if ctx.enabled() { "+" } else { " " });
     for i in tokens.iter() {
         print!("{}", i.span);
     }
     println!();
+    */
 
     let mut tokens = TokenList::new(tokens);
 

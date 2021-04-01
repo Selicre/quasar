@@ -50,13 +50,16 @@ impl Assembler {
             compare: vec![],
         }
     }
-    pub fn get_datasize(&self, label: usize) -> Option<f64> {
+    pub fn get_datasize(&self, label: usize, span: ContextStr, target: &mut Target) -> Option<f64> {
         // todo: maybe backrefs to find labels?
         for seg in self.segments.iter() {
-            if let Some(s) = seg.stmts.iter().position(|c| matches!(c.kind, StatementKind::Label(label))) {
+            if let Some(s) = seg.stmts.iter().position(|c| matches!(c.kind, StatementKind::Label(d) if d == label)) {
                 let start = seg.stmts[s].offset;
                 let other = seg.stmts[s+1..].iter().find(|c| matches!(c.kind, StatementKind::Label(_)));
-                let end = other.unwrap_or(seg.stmts.last().unwrap()).offset;
+                let end = other.unwrap_or_else(|| {
+                    target.push_warning(span, 0, "datasize function used on the last label of a segment".into());
+                    seg.stmts.last().unwrap()
+                }).offset;
                 return Some((end - start) as _)
             }
         }
@@ -67,7 +70,7 @@ impl Assembler {
     }
     pub fn new_segment(&mut self, span: ContextStr, s: StartKind, target: &mut Target) {
         let label_id = target.segment_label(self.segments.len());
-        println!("new segment: {}", label_id);
+        //println!("new segment: {}", label_id);
         match s {
             StartKind::Expression(ref c) => { self.labels.insert(label_id, c.clone()); },
             _ => panic!("no freespace yet"),
@@ -97,19 +100,18 @@ impl Assembler {
             _ => {},
         }
     }
-    pub fn write_to_file<W:Write+Seek>(&self, target: &mut Target, mut w: W) {
+    pub fn write_to_file<W:Write+Seek>(&self, target: &mut Target, mut w: W) -> Option<()> {
         for i in self.segments.iter() {
             let addr = match &i.start {
-                StartKind::Expression(e) => e.try_eval_int(target, self),
+                StartKind::Expression(e) => e.try_eval_int(target, self)? as u64,
                 _ => panic!("internal error: freespace pointer not resolved yet")
             };
-            let addr = if let Some(addr) = addr { addr as u64 } else { return; };
             // TODO: this needs to be abstracted into a mapper
             if  (addr&0xFE0000)==0x7E0000        //wram
             ||  (addr&0x408000)==0x000000        //hardware regs, ram mirrors, other strange junk
             ||  (addr&0x708000)==0x700000 {      //sram (low parts of banks 70-7D)
                 target.push_error(i.span.clone(), 0, "Attempt to seek to unmapped area".into());
-                return;
+                return None;
             }
             let offset = ((addr&0x7F0000)>>1|(addr&0x7FFF));
 
@@ -130,7 +132,7 @@ impl Assembler {
                         }
                     },
                     StatementKind::Data { expr } => {
-                        let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { return; };
+                        let val = expr.try_eval_int(target, self)?;
                         let val = val.to_le_bytes();
                         w.write_all(&val[..s.size]).unwrap();
                         written.write_all(&val[..s.size]).unwrap();
@@ -138,8 +140,8 @@ impl Assembler {
                     StatementKind::InstructionRel { opcode, expr } => {
                         w.write_all(&[*opcode]).unwrap();
                         written.write_all(&[*opcode]).unwrap();
-                        let mut val = if let Some(c) = expr.try_eval_int(target, self) { c } else { return; };
-                        println!("rel val: {}", val);
+                        let mut val = expr.try_eval_int(target, self)?;
+                        //println!("rel val: {}", val);
                         if expr.contains_label() {
                             // actually make relative
                             val = val.wrapping_sub(addr as u32 + s.offset as u32 + s.size as u32);
@@ -152,7 +154,7 @@ impl Assembler {
                         w.write_all(&[*opcode]).unwrap();
                         written.write_all(&[*opcode]).unwrap();
                         if s.size > 1 {
-                            let val = expr.try_eval_int(target, self).unwrap();
+                            let val = expr.try_eval_int(target, self)?;
                             let val = val.to_le_bytes();
                             w.write_all(&val[..s.size-1]).unwrap();
                             written.write_all(&val[..s.size-1]).unwrap();
@@ -179,6 +181,7 @@ impl Assembler {
                 offset += s.size;
             }
         }
+        Some(())
     }
     pub fn get_label_value(&self, label: usize) -> Option<&Expression> {
         self.labels.get(&label)

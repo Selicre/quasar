@@ -1,6 +1,7 @@
 use crate::expr::Expression;
 use crate::context::ContextStr;
 
+#[derive(Debug)]
 pub struct Statement {
     pub offset: usize,  // from the start of the segment
     pub kind: StatementKind,
@@ -8,6 +9,7 @@ pub struct Statement {
     pub span: ContextStr
 }
 
+#[derive(Debug)]
 pub enum StatementKind {
     Data {
         expr: Expression

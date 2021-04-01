@@ -93,7 +93,6 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
         },
         // support for `inc a` and the like
         Some(c) if &*c.span == "a" || &*c.span == "A" => {
-            println!("A INSTR: {:?} {:?}", instr, tokens.rest());
             if let Some(opcode) = try_opcode(instr.span.as_bytes(), AddressingMode::Implied) {
                 return Some(Statement::instruction(opcode, Expression::empty(), 1, instr.span.clone()))
             }
@@ -343,7 +342,7 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
     }
 
     if let Some(opcode) = try_opcode(instr.span.as_bytes(), AddressingMode::Relative) {
-        println!("{}: {}", opcode, instr.span);
+        //println!("{}: {}", opcode, instr.span);
         let stmt = Statement::instruction_rel(opcode, expr, 2, instr.span.clone());
         return Some(stmt)
     }

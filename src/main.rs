@@ -25,8 +25,9 @@ fn main() {
         println!("Parsing failed");
         return;
     }
+    target.profiler("executed");
     target.clear_messages();
-    let mut out = std::fs::File::create("out.bin").unwrap();
+    let mut out = std::io::BufWriter::new(std::fs::File::create("out.bin").unwrap());
     asm.write_to_file(&mut target, &mut out);
     for i in target.iter_messages() {
         println!("{}", i);
@@ -35,4 +36,5 @@ fn main() {
         println!("Assembly failed");
         return;
     }
+    target.profiler("finished");
 }

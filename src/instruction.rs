@@ -1,7 +1,7 @@
-use crate::statement::Statement;
-use crate::executor::{TokenList, Target};
-use crate::expr::Expression;
-use crate::lexer::Token;
+use crate::assembler::Statement;
+use crate::executor::Target;
+use crate::expression::Expression;
+use crate::lexer::{TokenList, Token};
 use crate::message::Message;
 
 include!(concat!(env!("OUT_DIR"), "/codegen.rs"));
@@ -373,6 +373,7 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
             let mode = if let Some(m) = mode { m } else { continue; };
             let opcode = try_opcode(instr.span.as_bytes(), mode);
             let opcode = if let Some(m) = opcode { m } else { continue; };
+            target.push_warning(instr.span.clone(), 0, format!("Unspecified addressing mode; assuming {}-bit", i*8));
             return Some(Statement::instruction(opcode, expr, i+1, instr.span.clone()));
         }
         if matches!(arg, ArgumentKind::Immediate) {

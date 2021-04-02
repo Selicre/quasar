@@ -88,13 +88,19 @@ impl ContextStr {
         let full = "".into();
         ContextStr { full, source, range, parent: None }
     }
-    pub fn set_parent(&mut self, parent: ContextStr) { self.parent = Some(Box::new(parent)); }
-    pub fn to_child_of(&mut self, mut parent: ContextStr) {
-        std::mem::swap(self, &mut parent);
-        self.set_parent(parent);
+    pub fn set_parent(&mut self, parent: ContextStr) {
+        // TODO: not recursive?
+        if let Some(c) = self.parent_mut() {
+            c.set_parent(parent)
+        } else {
+            self.parent = Some(Box::new(parent));
+        }
     }
     pub fn parent(&self) -> Option<&ContextStr> {
         self.parent.as_deref()
+    }
+    pub fn parent_mut(&mut self) -> Option<&mut ContextStr> {
+        self.parent.as_deref_mut()
     }
     pub fn cli() -> Self {
         ContextStr {

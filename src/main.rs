@@ -3,8 +3,7 @@ mod context;
 mod message;
 mod executor;
 mod lexer;
-mod expr;
-mod statement;
+mod expression;
 mod assembler;
 mod instruction;
 

@@ -277,3 +277,39 @@ pub fn display_str(input: &str) -> String {
     }
     out
 }
+
+#[derive(Clone)]
+pub struct TokenList<'a> {
+    inner: &'a [Token],
+    pos: usize
+}
+
+impl<'a> TokenList<'a> {
+    pub fn new(inner: &'a [Token]) -> Self {
+        Self { inner, pos: 0 }
+    }
+    pub fn next_non_wsp(&mut self) -> Option<&'a Token> {
+        while self.inner.get(self.pos)?.is_whitespace() { self.pos += 1; }
+        let res = self.inner.get(self.pos);
+        self.pos += 1;
+        res
+    }
+    pub fn next(&mut self) -> Option<&'a Token> {
+        let res = self.inner.get(self.pos);
+        self.pos += 1;
+        res
+    }
+    pub fn peek(&mut self) -> Option<&'a Token> {
+        self.clone().next()
+    }
+    pub fn peek_non_wsp(&mut self) -> Option<&'a Token> {
+        self.clone().next_non_wsp()
+    }
+    pub fn rest(&self) -> &'a [Token] {
+        &self.inner[self.pos..]
+    }
+    pub fn last(&self) -> Option<&'a Token> {
+        self.inner.last()
+    }
+}
+

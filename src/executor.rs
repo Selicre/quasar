@@ -12,7 +12,7 @@ use crate::lexer::{self, Token, TokenKind, TokenList};
 use crate::expression::{self, Label, Expression};
 use crate::assembler::{Statement, Assembler};
 
-use parser::exec_cmd;
+use parser::exec_stmt;
 
 mod parser;
 
@@ -20,7 +20,8 @@ pub struct Target {
     files: HashMap<Rc<str>, ParsedFile>,
     messages: Vec<Message>,
     defines: HashMap<String, Vec<Token>>,
-    macros: HashMap<String, Vec<Token>>,
+    macros: HashMap<String, Macro>,
+    cur_macro: Option<(String, Macro)>,
     functions: HashMap<String, (usize, Expression)>,
     label_idx: IndexSet<Label>,
     label_ctx: LabelCtx,
@@ -35,6 +36,7 @@ impl Target {
             defines: HashMap::new(),
             functions: HashMap::new(),
             macros: HashMap::new(),
+            cur_macro: None,
             label_idx: IndexSet::new(),
             label_ctx: LabelCtx::default(),
             has_error: false,
@@ -82,6 +84,16 @@ impl Target {
     }
     pub fn function(&mut self, name: &str) -> Option<&(usize, Expression)> {
         self.functions.get(name)
+    }
+    pub fn start_macro(&mut self, name: String, args: Vec<String>) {
+        self.cur_macro = Some((name, Macro { args, blocks: vec![] }));
+    }
+    pub fn finish_macro(&mut self) {
+        let m = self.cur_macro.take().unwrap();
+        self.macros.insert(m.0, m.1);
+    }
+    pub fn get_macro(&self, name: &str) -> Option<&Macro> {
+        self.macros.get(name)
     }
     pub fn set_label(&mut self, mut label: Label, context: ContextStr) -> usize {
         match &mut label {
@@ -210,126 +222,29 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
     while let Some((i, newline)) = file.stmt(ctx.exec_ptr) {
         let rep = ctx.rep_count.take().unwrap_or(1);
         for _ in 0..rep {
-            exec_stmt(i.clone(), newline, target, &mut ctx, asm);
+            exec_stmt(i.clone(), newline, target, &mut ctx, &HashMap::new(), asm);
         }
         ctx.exec_ptr += 1;
     }
     target.profiler(&format!("done {}", ff));
 }
 
-fn exec_stmt(i: ContextStr, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
-    //println!("executing: {} at {}", i, i.source().short());
-    let mut tokens = lexer::tokenize_stmt(i.clone(), target);
+#[derive(Clone)]
+pub struct Macro {
+    args: Vec<String>,
+    blocks: Vec<(ContextStr, bool)>
+}
 
-    // Parse setting defines as special syntax
-    if matches!(tokens.as_slice(),
-            [def,ws1,op,ws2,value,..]
-            if def.is_define()
-            && ws1.is_whitespace()
-            && op.is_symbol()
-            && ws2.is_whitespace()) {
-        // mostly for endifs to work properly
-        exec_cmd(&[], newline, target, ctx, asm);
-        if !ctx.enabled() { return; }
-        let mut exp_defines = false;
-        let mut check_existing = false;
-        let mut append = false;
-        let mut do_math = false;
-        match &*tokens[2].span {
-            "=" => {},
-            ":=" => exp_defines = true,
-            "?=" => check_existing = true,
-            "+=" => append = true,
-            "#=" => { do_math = true; exp_defines = true; },
-            _ => {
-                target.push_error(tokens[2].span.clone(), 9, format!("Unknown define operator"));
-                return;
-            }
+pub fn exec_macro(name: &str, args: Vec<Vec<Token>>, source: ContextStr, target: &mut Target, asm: &mut Assembler) {
+    let mut ctx = ExecCtx::default();
+    let mac = target.get_macro(name).unwrap().clone();
+    let args = mac.args.iter().cloned().zip(args.into_iter()).collect::<HashMap<_,_>>();
+    while let Some((i, newline)) = mac.blocks.get(ctx.exec_ptr) {
+        let rep = ctx.rep_count.take().unwrap_or(1);
+        for _ in 0..rep {
+            exec_stmt(i.clone(), *newline, target, &mut ctx, &args, asm);
         }
-        let mut v;
-        if let Some(value) = tokens[4].as_string() {
-            let ctx = ContextStr::new(value[1..value.len()-1].to_string(), LineInfo::custom(format!("<define at {}>", tokens[4].span.source().short())));
-            if tokens.len() > 5 {
-                let mut value = i.clone();
-                value.advance(tokens[5].span.start() - i.start());
-                target.push_error(value, 7, format!("Trailing characters at the end of define"));
-                return;
-            }
-            v = lexer::tokenize_stmt(ctx, target);
-        } else {
-            v = tokens[4..].to_vec();
-        }
-
-        let name = tokens[0].as_define().unwrap();
-        if exp_defines { expand_defines(&mut v, &i, target); }
-        if do_math {
-            let mut t = TokenList::new(&v);
-            let expr = Expression::parse(&mut t, target);
-            let value = expr.eval_const(target);
-            target.defines.insert(name.to_string(), vec![Token::from_number(tokens[0].span.clone(), value as _)]);
-            return;
-        }
-
-        let name = if tokens[0].is_define_escaped().unwrap() {
-            if let Some(c) = lexer::expand_str(name, target) { c } else { return; }
-        } else {
-            name.to_string()
-        };
-        if append {
-            let entry = target.defines.entry(name).or_insert(vec![]);
-            entry.append(&mut v);
-        } else if check_existing {
-            if !target.defines.contains_key(&name) {
-                target.defines.insert(name, v);
-            }
-        } else {
-            target.defines.insert(name, v);
-        }
-
-        return;
-    }
-    let expanded = expand_defines(&mut tokens, &i, target);
-    if expanded {
-        // Glue tokens
-        let mut cur = 0;
-        while cur < tokens.len() {
-            if !tokens[cur].is_ident() {
-                cur += 1;
-                continue;
-            }
-
-            let t = tokens[cur..].iter().take_while(|c| c.is_ident() || c.is_decimal()).cloned().collect::<Vec<_>>();
-            if t.len() > 1 {
-                let mut new_token = String::new();
-                let mut locations = String::new();
-                for i in t.iter() {
-                    new_token.push_str(&i.span);
-                    locations.push_str(&format!("{}, ", i.span.source().short()));
-                }
-                locations.pop();
-                locations.pop();
-                let mut span = ContextStr::new(new_token, LineInfo::custom(format!("<glued from {}>", locations)));
-                span.set_parent(t.first().unwrap().span.clone());
-                let new_token = Token {
-                    span,
-                    kind: TokenKind::Ident
-                };
-                tokens.splice(cur..cur+t.len(), std::iter::once(new_token));
-            }
-            cur += 1;
-        }
-        // Split statements and process them separately
-        let mut start = 0;
-        for i in 0..tokens.len().saturating_sub(2) {
-            if tokens[i].is_whitespace() && &*tokens[i+1].span == ":" && tokens[i+2].is_whitespace() {
-                let mut t = &tokens[start..i];
-                exec_cmd(t, false, target, ctx, asm);
-                start = i + 2;
-            }
-        }
-        exec_cmd(&tokens[start..], newline, target, ctx, asm);
-    } else {
-        exec_cmd(&tokens, newline, target, ctx, asm);
+        ctx.exec_ptr += 1;
     }
 }
 
@@ -386,4 +301,3 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
     }
     expanded
 }
-

@@ -171,6 +171,7 @@ impl Assembler {
                             written.write_all(&[*opcode]).unwrap();
                         }
                     },
+                    StatementKind::Skip => {}
                     _ => {}
                 }
                 if self.compare.len() > 0 {
@@ -229,7 +230,8 @@ pub enum StatementKind {
     },
     Print {
         expr: Expression
-    }
+    },
+    Skip
 }
 
 impl Statement {
@@ -259,5 +261,8 @@ impl Statement {
     }
     pub fn instruction_rep(opcode: u8, size: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::InstructionRep { opcode }, size, span)
+    }
+    pub fn skip(amt: usize, span: ContextStr) -> Self {
+        Statement::new(StatementKind::Skip, amt, span)
     }
 }

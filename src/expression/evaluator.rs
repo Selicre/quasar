@@ -86,10 +86,8 @@ impl Expression {
                     // adjust span info (otherwise errors go to the function def, which is not what
                     // you want)
                     for i in expr.nodes.iter_mut() {
-                        println!("{} -> {} [{:?}]", i.0, span, span.parent());
                         i.0.set_parent(span.clone());
                     }
-                    println!("---");
                     expr.try_eval_stack(constexpr, target, asm, stack, &args[..], label_depth)?;
                 }
                 ExprNode::Call(len, name) => {

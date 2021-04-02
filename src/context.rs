@@ -160,6 +160,9 @@ impl ContextStr {
         self.range.end -= by;
         cx
     }
+    pub fn eq(&self, other: &str) -> bool {
+        &**self == other
+    }
     pub fn advance(&mut self, by: usize) -> ContextStr {
         let cx = ContextStr {
             full: self.full.clone(),

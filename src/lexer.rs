@@ -18,6 +18,20 @@ impl Token {
             _ => None
         }
     }
+    pub fn is_macro_arg(&self) -> bool {
+        matches!(self.kind, TokenKind::MacroArg)
+    }
+    pub fn as_macro_arg(&self) -> Option<ContextStr> {
+        match self.kind {
+            TokenKind::MacroArg => {
+                let mut d = self.span.clone();
+                d.advance(1);
+                d.cut(1);
+                Some(d)
+            },
+            _ => None
+        }
+    }
     pub fn is_define_escaped(&self) -> Option<bool> {
         match self.kind {
             TokenKind::Define { escaped } => Some(escaped),
@@ -78,11 +92,12 @@ pub enum TokenKind {
     Symbol,         // & or +=
     String,         // "thing"
     Char,
+    MacroArg,       // <thing>
     Define { escaped: bool }, // !thing or !{thing}
     Whitespace
 }
 
-pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
+pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool) -> Vec<Token> {
     let is_ident_start = |c: char| c.is_alphabetic() || c == '_';
     let is_ident = |c: char| c.is_alphanumeric() || c == '_';
     let is_number_start = |c: char| c.is_numeric() || c == '$' || c == '%';
@@ -91,6 +106,24 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
 
     let mut out = vec![];
     while let Some(c) = input.chars().next() {
+        if c == '<' {
+            let mut peek = input.clone();
+            let needle = peek.needle();
+            let open = peek.advance(1);
+            let span = peek.advance_some(peek.find(|c| !is_ident(c)));
+            let close = peek.advance(1);
+            if &*close == ">" {
+                input = peek;
+                let span = input.prefix_from(needle);
+                if in_macro {
+                    out.push(Token { span, kind: TokenKind::MacroArg });
+                    continue;
+                } else {
+                    target.push_error(span.clone(), 0, format!("Macro token outside of macro"));
+                    return vec![]
+                }
+            }
+        }   // try to parse macro arg
         if is_ident_start(c) {
             let span = input.advance_some(input.find(|c| !is_ident(c)));
             out.push(Token { span, kind: TokenKind::Ident });
@@ -122,6 +155,7 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
             let span = input.prefix_from(needle);
             if overflowed {
                 target.push_error(span.clone(), 3, format!("Number overflows a 64-bit value"));
+                return vec![]
             }
             if num.len() == 0 {
                 out.push(Token { span, kind: TokenKind::Symbol });
@@ -138,12 +172,12 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
                 if let Some(c) = input.advance_char() {
                     match c {
                         '\\' => { input.advance_char(); }
-                        '"' => break,
+                        '"' => if input.skip_if("\"") { continue; } else { break },
                         _ => {}
                     }
                 } else {
                     target.push_error(input.clone(), 5, format!("Unclosed string literal"));
-                    return out;
+                    return vec![]
                 }
             }
             let span = input.prefix_from(needle);
@@ -163,7 +197,7 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target) -> Vec<Token> {
                 // do nothing
             } else {
                 target.push_error(input.clone(), 10, format!("Stray escape sequence {}", input));
-                return out;
+                return vec![]
             }
         } else if c == '+' || c == '-' || c == '.' {
             let span = input.advance_some(input.find(|n: char| n != c));
@@ -268,7 +302,7 @@ pub fn display_str(input: &str) -> String {
     let mut out = String::new();
     let mut iter = input[1..input.len()-1].chars();
     while let Some(c) = iter.next() {
-        if c == '\\' {
+        if c == '\\' || c == '\"' {
             let c = iter.next().expect("uh oh");
             out.push(c);
         } else {
@@ -310,6 +344,16 @@ impl<'a> TokenList<'a> {
     }
     pub fn last(&self) -> Option<&'a Token> {
         self.inner.last()
+    }
+    pub fn split_off(&mut self) -> Option<TokenList<'a>> {
+        self.inner.windows(3)
+            .position(|i| i[0].is_whitespace() && &*i[1].span == ":" && i[2].is_whitespace())
+            .map(|c| {
+                let pos = self.pos;
+                let sp = TokenList { inner: &self.inner[..pos+c], pos };
+                self.pos += c;
+                sp
+            })
     }
 }
 

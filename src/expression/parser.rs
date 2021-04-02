@@ -17,6 +17,7 @@ pub fn parse_literal(tokens: &mut TokenList<'_>, target: &mut Target) -> Option<
         }
         TokenKind::String => {
             let exp = crate::lexer::expand_str(t.span.clone(), target)?;
+            let exp = crate::lexer::display_str(&exp);
             (t.span.clone(), ExprNode::Value(Value::String(exp)))
         }
         _ => return None

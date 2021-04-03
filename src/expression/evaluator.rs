@@ -113,6 +113,11 @@ impl Expression {
                     }
                     let value = match &**name {
                         "not" => func! { |a| Unop::Not.exec(&span, a, target) },
+                        "or" => func! { |a,b| Binop::Or.exec(&span, a, b, target) },
+                        "nor" => func! { |a,b| Unop::Not.exec(&span, Binop::Or.exec(&span, a, b, target), target) },
+                        "and" => func! { |a,b| Binop::And.exec(&span, a, b, target) },
+                        "equal" => func! { |a,b| Binop::Eq.exec(&span, a, b, target) },
+                        "notequal" => func! { |a,b| Binop::Ne.exec(&span, a, b, target) },
                         "min" => func! { |a,b| a.min(b) },
                         "max" => func! { |a,b| a.max(b) },
                         "select" => func! { |cond,a,b| if cond != 0.0 { a } else { b } },
@@ -154,9 +159,10 @@ impl Expression {
         Some(())
     }
     pub fn try_eval(&self, constexpr: bool, target: &mut Target, asm: &Assembler) -> Option<(ContextStr, StackValue)> {
+        if self.nodes.len() == 0 { return None; }
         let mut stack = vec![];
         self.try_eval_stack(constexpr, target, asm, &mut stack, &[], &mut vec![])?;
-        let val = stack.pop().expect("unbalanced expr");
+        let val = stack.pop().expect(&format!("unbalanced expr: {:?}", self));
         //println!("value: {:?}", val);
         Some(val)
     }

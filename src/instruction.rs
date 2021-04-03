@@ -107,9 +107,9 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
         let s = tokens.next_non_wsp();
         size_set = true;
         size = Some(match s.map(|c| &*c.span) {
-            Some("b") => 1,
-            Some("w") => 2,
-            Some("l") => 3,
+            Some("b") | Some("B") => 1,
+            Some("w") | Some("W") => 2,
+            Some("l") | Some("L") => 3,
             _ => {
                 target.push_error(s.unwrap_or(dot).span.clone(), 0, "Unknown size hint".into());
                 return None;
@@ -373,7 +373,8 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
             let mode = if let Some(m) = mode { m } else { continue; };
             let opcode = try_opcode(instr.span.as_bytes(), mode);
             let opcode = if let Some(m) = opcode { m } else { continue; };
-            target.push_warning(instr.span.clone(), 0, format!("Unspecified addressing mode; assuming {}-bit", i*8));
+            // TODO: fix this to not throw for literally everything
+            //target.push_warning(instr.span.clone(), 0, format!("Unspecified addressing mode; assuming {}-bit", i*8));
             return Some(Statement::instruction(opcode, expr, i+1, instr.span.clone()));
         }
         if matches!(arg, ArgumentKind::Immediate) {

@@ -123,7 +123,8 @@ impl Assembler {
             w.seek(SeekFrom::Start(offset));
             let mut offset = 0;
             for s in i.stmts.iter() {
-                if offset != s.offset { panic!("uh oh wrong offset: {} != {}", offset, s.offset); }
+                if offset != s.offset { println!("uh oh wrong offset: {} != {}", offset, s.offset); }
+                offset += s.size;
                 let mut written = vec![];
                 match &s.kind {
                     StatementKind::Print { expr } => {
@@ -137,7 +138,7 @@ impl Assembler {
                         }
                     },
                     StatementKind::Data { expr } => {
-                        let val = expr.try_eval_int(target, self)?;
+                        let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
                         let val = val.to_le_bytes();
                         w.write_all(&val[..s.size]).unwrap();
                         written.write_all(&val[..s.size]).unwrap();
@@ -145,7 +146,7 @@ impl Assembler {
                     StatementKind::InstructionRel { opcode, expr } => {
                         w.write_all(&[*opcode]).unwrap();
                         written.write_all(&[*opcode]).unwrap();
-                        let mut val = expr.try_eval_int(target, self)?;
+                        let mut val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
                         //println!("rel val: {}", val);
                         if expr.contains_label() {
                             // actually make relative
@@ -159,7 +160,7 @@ impl Assembler {
                         w.write_all(&[*opcode]).unwrap();
                         written.write_all(&[*opcode]).unwrap();
                         if s.size > 1 {
-                            let val = expr.try_eval_int(target, self)?;
+                            let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
                             let val = val.to_le_bytes();
                             w.write_all(&val[..s.size-1]).unwrap();
                             written.write_all(&val[..s.size-1]).unwrap();
@@ -184,7 +185,6 @@ impl Assembler {
                         println!("test passed: {:02X?} == {:02X?}", lhs, rhs);
                     }
                 }
-                offset += s.size;
             }
         }
         Some(())

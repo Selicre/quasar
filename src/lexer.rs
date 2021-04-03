@@ -346,7 +346,7 @@ impl<'a> TokenList<'a> {
         self.inner.last()
     }
     pub fn split_off(&mut self) -> Option<TokenList<'a>> {
-        self.inner.windows(3)
+        self.inner[self.pos..].windows(3)
             .position(|i| i[0].is_whitespace() && &*i[1].span == ":" && i[2].is_whitespace())
             .map(|c| {
                 let pos = self.pos;

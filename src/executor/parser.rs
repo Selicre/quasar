@@ -161,7 +161,6 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
         let t = tokens[cur..].iter().take_while(|c| {
             std::mem::take(&mut first) || c.is_ident() || c.is_decimal()
         }).cloned().collect::<Vec<_>>();
-        println!("asd: {:?}", t);
         if t.len() > 1 {
             let mut new_token = String::new();
             let mut locations = String::new();
@@ -185,13 +184,11 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
 
 
 pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
-    /*
     print!("{} ", if ctx.enabled() { "+" } else { " " });
-    for i in tokens.iter() {
+    for i in tokens.rest().iter() {
         print!("{}", i.span);
     }
     println!();
-    */
 
     loop {
         let mut peek = tokens.clone();
@@ -201,8 +198,12 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
             if ate_colon { peek.next(); }
             if c.1.no_colon() || ate_colon {
                 tokens = peek;
-                let id = target.set_label(c.1, c.0.clone());
-                asm.append(Statement::label(id, c.0), target);
+                if ctx.enabled() {
+                    let id = target.set_label(c.1, c.0.clone());
+                    asm.append(Statement::label(id, c.0), target);
+                } else {
+                    println!("skipping label: {:?} ({:?}, {:?})", c.0, ctx.if_stack, ctx.if_depth);
+                }
                 continue;
             }
         }
@@ -214,6 +215,21 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
         ctx.if_inline = false;
         ctx.run_endif();
     }
+    if ctx.enabled() {
+        exec_enabled(tokens, newline, if_inline, target, ctx, asm);
+    } else {
+        exec_disabled(tokens, newline, if_inline, target, ctx, asm);
+    }
+}
+fn exec_disabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
+    let cmd = if let Some(c) = tokens.next_non_wsp() { c } else { return; };
+    match &*cmd.span.to_lowercase() {
+        "if" => {},
+        _ => {}
+    }
+}
+
+fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
     let cmd = if let Some(c) = tokens.next_non_wsp() { c } else { return; };
 
     if matches!(tokens.peek_non_wsp(), Some(c) if &*c.span == "=") {
@@ -221,17 +237,15 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
         let id = target.label_id(Label::Named { stack: vec![cmd.span.to_string()] });
         let expr = Expression::parse(&mut tokens, target);
         asm.set_label(id, expr, cmd.span.clone(), target);
+        return;
     }
-
-    match &*cmd.span {
+    match &*cmd.span.to_lowercase() {
         "if" => {
             if let Some(_) = tokens.peek_non_wsp() {
-                if ctx.enabled() {
-                    let expr = Expression::parse(&mut tokens, target);
-                    let val = expr.eval_const(target);
-                    if val == 0.0 {
-                        ctx.if_depth = Some(ctx.if_stack.len());
-                    }
+                let expr = Expression::parse(&mut tokens, target);
+                let val = expr.eval_const(target);
+                if val == 0.0 {
+                    ctx.if_depth = Some(ctx.if_stack.len());
                 }
                 ctx.if_inline = !newline;
                 ctx.if_stack.push(None);
@@ -243,13 +257,11 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
         }
         "while" => {
             if let Some(c) = tokens.peek_non_wsp() {
-                if ctx.enabled() {
-                    let expr = Expression::parse(&mut tokens, target);
-                    let val = expr.eval_const(target);
-                    println!("while cond: {}", val);
-                    if val == 0.0 {
-                        ctx.if_depth = Some(ctx.if_stack.len());
-                    }
+                let expr = Expression::parse(&mut tokens, target);
+                let val = expr.eval_const(target);
+                println!("while cond: {}", val);
+                if val == 0.0 {
+                    ctx.if_depth = Some(ctx.if_stack.len());
                 }
                 ctx.if_inline = !newline;
                 ctx.if_stack.push(Some(ctx.exec_ptr));
@@ -278,9 +290,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
                 return;
             }
             if let Some(_) = tokens.peek_non_wsp() {
-                if ctx.enabled() {
-                    ctx.if_branch_done = true;
-                }
+                ctx.if_branch_done = true;
                 if ctx.if_branch_done {
                     ctx.if_depth = Some(ctx.if_stack.len());
                 } else {
@@ -316,9 +326,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
                     .with_help(format!("remove `else`")));
                 return;
             }
-            if ctx.enabled() {
-                ctx.if_branch_done = true;
-            }
+            ctx.if_branch_done = true;
             if ctx.if_branch_done {
                 ctx.if_depth = Some(ctx.if_stack.len());
             } else {
@@ -326,10 +334,8 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
             }
         }
         "endif" => {
-            if ctx.enabled() {
-                // reset the if branch state
-                ctx.if_branch_done = false;
-            }
+            // reset the if branch state
+            ctx.if_branch_done = false;
             if if_inline {
                 target.push_msg(Message::error(cmd.span.clone(), 14, format!("`endif` within inline `if`"))
                     .with_help(format!("inline `if` statements have an implicit `endif` at the end"))
@@ -343,7 +349,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
             }
             ctx.run_endif();
         }
-        "%" if ctx.enabled() => {
+        "%" => {
             let name = if let Some(n) = tokens.next_non_wsp() { n } else {
                 target.push_msg(Message::error(cmd.span.clone(), 0, format!("macro call with no name"))
                     .with_help(format!("add a macro name, like `%test()`")));
@@ -371,7 +377,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
             }
             exec_macro(&name.span, macro_args, cmd.span.clone(), target, asm);
         }
-        "function" if ctx.enabled() => {
+        "function" => {
             let name = if let Some(n) = tokens.next_non_wsp() { n } else {
                 target.push_msg(Message::error(cmd.span.clone(), 0, format!("`function` statement with no function name"))
                     .with_help(format!("add a function name and body, like `function test(a) = a+2`")));
@@ -383,7 +389,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
             let expr = Expression::parse_fn_body(&args, &mut tokens, target);
             target.add_function(name.span.to_string(), args.len(), expr);
         }
-        "rep" if ctx.enabled() => {
+        "rep" if !tokens.peek_non_wsp().map(|c| c.span.eq("#")).unwrap_or(true) => {
             if tokens.peek_non_wsp().is_none() {
                 target.push_msg(Message::error(cmd.span.clone(), 17, format!("`repeat` statement with no loop count"))
                     .with_help(format!("add a loop count, like `repeat 5`")));
@@ -394,7 +400,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
             if count < 0.0 { count = 0.0; }
             ctx.rep_count = Some(count as usize);
         }
-        "skip" if ctx.enabled() => {
+        "skip" => {
             if tokens.peek_non_wsp().is_none() {
                 target.push_msg(Message::error(cmd.span.clone(), 17, format!("`skip` statement with no skip count"))
                     .with_help(format!("add a skip count, like `skip 5`")));
@@ -407,7 +413,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
                 asm.append(stmt, target);
             }
         }
-        "incsrc" if ctx.enabled() => {
+        "incsrc" => {
             let temp;
             let c = if let Some(c) = tokens.peek_non_wsp() {
                 if c.is_string() {
@@ -422,7 +428,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
             };
             exec_file(c.into(), cmd.span.clone(), target, asm);
         }
-        "db" | "dw" | "dl" | "dd" if ctx.enabled() => {
+        "db" | "dw" | "dl" | "dd" => {
             let size = match &*cmd.span { "db" => 1, "dw" => 2, "dl" => 3, "dd" => 4, _ => 0 };
             loop {
                 if tokens.peek_non_wsp().map(|c| c.is_string()).unwrap_or(false) {
@@ -446,22 +452,26 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
                 }
             }
         }
-        "org" if ctx.enabled() => {
+        "org" => {
             let c = Expression::parse(&mut tokens, target);
             asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
         }
-        "print" if ctx.enabled() => {
+        "pad" => {
+            let c = Expression::parse(&mut tokens, target);
+            //asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+        }
+        "print" => {
             //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
             //target.push_msg(Message::info(cmd.span.clone(), 0, c))
             let c = Expression::parse(&mut tokens, target);
             let stmt = Statement::print(c, cmd.span.clone());
             asm.append(stmt, target);
         }
-        "expr" if ctx.enabled() => {
+        "expr" => {
             let c = Expression::parse(&mut tokens, target);
             target.push_msg(Message::info(cmd.span.clone(), 0, format!("{:?}", c)))
         }
-        instr if instr.len() == 3 && ctx.enabled() => {
+        instr if instr.len() == 3 => {
             if let Some(stmt) = crate::instruction::parse(cmd, &mut tokens, target) {
                 asm.append(stmt, target);
             }

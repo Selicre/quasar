@@ -121,7 +121,7 @@ impl ContextStr {
             let pad_line_num = " ".repeat(format!("{}", self.source.line).len());
             format!(" {} |\n {} | {}\n {} | \x1B[1;38;5;{}m{}{}{}\x1B[0m", pad_line_num, self.source.line, &self.full[start..end], pad_line_num, severity.color(), pad_start, highlight, pad_end)
         } else {
-            format!("[formatting error: {}, {}] {:?} {:?}", start, end, &self.full[start..end], &self.full)
+            format!("[formatting error: {}, {}]", start, end)
         }
     }
     pub fn local(&self) -> LocalContext {

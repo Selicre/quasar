@@ -95,6 +95,9 @@ impl Target {
     pub fn get_macro(&self, name: &str) -> Option<&Macro> {
         self.macros.get(name)
     }
+    pub fn labels(&self) -> &IndexSet<Label> {
+        &self.label_idx
+    }
     pub fn set_label(&mut self, mut label: Label, context: ContextStr) -> usize {
         match &mut label {
             Label::Named { stack } => self.label_ctx.named = stack.clone(),
@@ -162,6 +165,15 @@ struct LabelCtx {
     neg: Vec<usize>,
     pos: Vec<usize>,
 }
+
+enum CondLayer {
+    IfTrue,
+    IfFalse,
+    IfDone,
+    WhileTrue(usize),
+    WhileFalse
+}
+
 #[derive(Default)]
 struct ExecCtx {
     exec_ptr: usize,
@@ -177,6 +189,7 @@ impl ExecCtx {
         self.if_depth.is_none()
     }
     pub fn run_endif(&mut self) {
+        let depth = self.if_stack.len();
         if let Some(c) = self.if_stack.pop().unwrap() {
             if self.enabled() {
                 self.exec_ptr = c-1;
@@ -184,7 +197,7 @@ impl ExecCtx {
             }
         }
         if let Some(c) = self.if_depth {
-            if c == self.if_stack.len() { self.if_depth = None; }
+            if c == depth { self.if_depth = None; }
         }
     }
 }
@@ -203,13 +216,14 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
             }
         };
 
-        let file_str = match String::from_utf8(file) {
+        let mut file_str = match String::from_utf8(file) {
             Ok(c) => c,
             Err(e) => {
                 target.push_error(source, 2, format!("File {} is not utf-8: {}", filename, e));
                 return;
             }
         };
+        if !file_str.ends_with("\n") { file_str.push('\n'); }
         let mut file = ContextStr::new(file_str, LineInfo::file(filename.clone()));
         let stmts = splitter::split_file(file.clone(), target).into_boxed_slice().into();
         target.files.entry(filename.clone()).or_insert(ParsedFile {

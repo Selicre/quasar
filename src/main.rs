@@ -27,6 +27,14 @@ fn main() {
     }
     target.profiler("executed");
     target.clear_messages();
+
+    for (k,v) in target.labels().clone().iter().enumerate() {
+        if let Some(expr) = asm.get_label_value(k).cloned() {
+            let expr = expr.try_eval_float(&mut target, &mut asm).unwrap();
+            println!("{:?} => {}", v, expr);
+        }
+    }
+
     let mut out = std::io::BufWriter::new(std::fs::File::create("out.bin").unwrap());
     asm.write_to_file(&mut target, &mut out);
     for i in target.iter_messages() {

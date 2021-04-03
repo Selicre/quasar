@@ -184,11 +184,13 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
 
 
 pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
-    print!("{} ", if ctx.enabled() { "+" } else { " " });
-    for i in tokens.rest().iter() {
-        print!("{}", i.span);
+    if false {
+        print!("{} ", if ctx.enabled() { "+" } else { " " });
+        for i in tokens.rest().iter() {
+            print!("{}", i.span);
+        }
+        println!(" {:?}", ctx.if_stack);
     }
-    println!();
 
     loop {
         let mut peek = tokens.clone();
@@ -202,7 +204,6 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
                     let id = target.set_label(c.1, c.0.clone());
                     asm.append(Statement::label(id, c.0), target);
                 } else {
-                    println!("skipping label: {:?} ({:?}, {:?})", c.0, ctx.if_stack, ctx.if_depth);
                 }
                 continue;
             }
@@ -210,26 +211,89 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
         break;
     }
 
-    let if_inline = ctx.if_inline;
+    if ctx.enabled() {
+        exec_enabled(tokens, newline, target, ctx, asm);
+    } else {
+        exec_disabled(tokens, newline, target, ctx, asm);
+    }
     if ctx.if_inline && newline {
         ctx.if_inline = false;
         ctx.run_endif();
     }
-    if ctx.enabled() {
-        exec_enabled(tokens, newline, if_inline, target, ctx, asm);
-    } else {
-        exec_disabled(tokens, newline, if_inline, target, ctx, asm);
-    }
 }
-fn exec_disabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
+fn exec_disabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
+    // todo: this sucks balls
     let cmd = if let Some(c) = tokens.next_non_wsp() { c } else { return; };
     match &*cmd.span.to_lowercase() {
-        "if" => {},
+        "if" => ctx.enter_skip(),
+        "while" => ctx.enter_skip(),
+        "elseif" if !ctx.skipping() => {
+            if ctx.if_inline {
+                target.push_msg(Message::error(cmd.span.clone(), 19, format!("`elseif` within inline `if`"))
+                    .with_help(format!("inline `if` statements can't use `elseif`"))
+                    .with_help(format!("remove the `elseif`")));
+                return;
+            }
+            if ctx.if_stack.len() == 0 {
+                target.push_msg(Message::error(cmd.span.clone(), 20, format!("Stray `elseif`"))
+                    .with_help(format!("change `elseif` to `if`")));
+                return;
+            }
+            // Are we in a while loop?
+            if ctx.if_stack.last().unwrap().is_while() {
+                target.push_msg(Message::error(cmd.span.clone(), 21, format!("`elseif` after a `while` loop"))
+                    .with_help(format!("remove `elseif`")));
+                return;
+            }
+            if let Some(_) = tokens.peek_non_wsp() {
+                let expr = Expression::parse(&mut tokens, target);
+                let val = expr.eval_const(target);
+                ctx.enter_elseif(val != 0.0);
+            } else {
+                target.push_msg(Message::error(cmd.span.clone(), 13, format!("`elseif` statement with no condition"))
+                    .with_help(format!("add a condition, like `if 2+2 == 4`")));
+                return;
+            }
+        }
+        "else" if !ctx.skipping() => {
+            if ctx.if_inline {
+                target.push_msg(Message::error(cmd.span.clone(), 22, format!("`else` within inline `if`"))
+                    .with_help(format!("inline `if` statements can't use `else`"))
+                    .with_help(format!("remove the `else`")));
+                return;
+            }
+            if ctx.if_stack.len() == 0 {
+                target.push_msg(Message::error(cmd.span.clone(), 23, format!("Stray `else`"))
+                    .with_help(format!("remove `else`")));
+                return;
+            }
+            // Are we in a while loop?
+            if ctx.if_stack.last().unwrap().is_while() {
+                target.push_msg(Message::error(cmd.span.clone(), 24, format!("`else` after a `while` loop"))
+                    .with_help(format!("remove `else`")));
+                return;
+            }
+            ctx.enter_elseif(true);
+        }
+        "endif" => {
+            if ctx.if_inline {
+                target.push_msg(Message::error(cmd.span.clone(), 14, format!("`endif` within inline `if`"))
+                    .with_help(format!("inline `if` statements have an implicit `endif` at the end"))
+                    .with_help(format!("remove the `endif`")));
+                return;
+            }
+            if ctx.if_stack.len() == 0 {
+                target.push_msg(Message::error(cmd.span.clone(), 15, format!("Stray `endif`"))
+                    .with_help(format!("remove the `endif` or put an appropriate `if` statement above it")));
+                return;
+            }
+            ctx.run_endif();
+        }
         _ => {}
     }
 }
 
-fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
+fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
     let cmd = if let Some(c) = tokens.next_non_wsp() { c } else { return; };
 
     if matches!(tokens.peek_non_wsp(), Some(c) if &*c.span == "=") {
@@ -244,11 +308,8 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &
             if let Some(_) = tokens.peek_non_wsp() {
                 let expr = Expression::parse(&mut tokens, target);
                 let val = expr.eval_const(target);
-                if val == 0.0 {
-                    ctx.if_depth = Some(ctx.if_stack.len());
-                }
+                ctx.enter_if(val != 0.0);
                 ctx.if_inline = !newline;
-                ctx.if_stack.push(None);
             } else {
                 target.push_msg(Message::error(cmd.span.clone(), 13, format!("`if` statement with no condition"))
                     .with_help(format!("add a condition, like `if 2+2 == 4`")));
@@ -259,12 +320,8 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &
             if let Some(c) = tokens.peek_non_wsp() {
                 let expr = Expression::parse(&mut tokens, target);
                 let val = expr.eval_const(target);
-                println!("while cond: {}", val);
-                if val == 0.0 {
-                    ctx.if_depth = Some(ctx.if_stack.len());
-                }
+                ctx.enter_while(val != 0.0);
                 ctx.if_inline = !newline;
-                ctx.if_stack.push(Some(ctx.exec_ptr));
             } else {
                 target.push_msg(Message::error(cmd.span.clone(), 16, format!("`while` statement with no condition"))
                     .with_help(format!("add a condition, like `while 2+2 == 4`")));
@@ -272,7 +329,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &
             }
         }
         "elseif" => {
-            if if_inline {
+            if ctx.if_inline {
                 target.push_msg(Message::error(cmd.span.clone(), 19, format!("`elseif` within inline `if`"))
                     .with_help(format!("inline `if` statements can't use `elseif`"))
                     .with_help(format!("remove the `elseif`")));
@@ -284,24 +341,15 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &
                 return;
             }
             // Are we in a while loop?
-            if ctx.if_stack.last().unwrap().is_some() {
+            if ctx.if_stack.last().unwrap().is_while() {
                 target.push_msg(Message::error(cmd.span.clone(), 21, format!("`elseif` after a `while` loop"))
                     .with_help(format!("remove `elseif`")));
                 return;
             }
             if let Some(_) = tokens.peek_non_wsp() {
-                ctx.if_branch_done = true;
-                if ctx.if_branch_done {
-                    ctx.if_depth = Some(ctx.if_stack.len());
-                } else {
-                    let expr = Expression::parse(&mut tokens, target);
-                    let val = expr.eval_const(target);
-                    if val == 0.0 {
-                        ctx.if_depth = Some(ctx.if_stack.len());
-                    } else {
-                        ctx.if_depth = None;
-                    }
-                }
+                let expr = Expression::parse(&mut tokens, target);
+                let val = expr.eval_const(target);
+                ctx.enter_elseif(val != 0.0);
             } else {
                 target.push_msg(Message::error(cmd.span.clone(), 13, format!("`elseif` statement with no condition"))
                     .with_help(format!("add a condition, like `if 2+2 == 4`")));
@@ -309,7 +357,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &
             }
         }
         "else" => {
-            if if_inline {
+            if ctx.if_inline {
                 target.push_msg(Message::error(cmd.span.clone(), 22, format!("`else` within inline `if`"))
                     .with_help(format!("inline `if` statements can't use `else`"))
                     .with_help(format!("remove the `else`")));
@@ -321,22 +369,15 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &
                 return;
             }
             // Are we in a while loop?
-            if ctx.if_stack.last().unwrap().is_some() {
+            if ctx.if_stack.last().unwrap().is_while() {
                 target.push_msg(Message::error(cmd.span.clone(), 24, format!("`else` after a `while` loop"))
                     .with_help(format!("remove `else`")));
                 return;
             }
-            ctx.if_branch_done = true;
-            if ctx.if_branch_done {
-                ctx.if_depth = Some(ctx.if_stack.len());
-            } else {
-                ctx.if_depth = None;
-            }
+            ctx.enter_elseif(true);
         }
         "endif" => {
-            // reset the if branch state
-            ctx.if_branch_done = false;
-            if if_inline {
+            if ctx.if_inline {
                 target.push_msg(Message::error(cmd.span.clone(), 14, format!("`endif` within inline `if`"))
                     .with_help(format!("inline `if` statements have an implicit `endif` at the end"))
                     .with_help(format!("remove the `endif`")));
@@ -456,6 +497,22 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &
             let c = Expression::parse(&mut tokens, target);
             asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
         }
+        "incbin" => {
+            let temp;
+            let c = if let Some(c) = tokens.peek_non_wsp() {
+                if c.is_string() {
+                    temp = if let Some(c) = lexer::expand_str(c.span.clone(), target) { c } else { return; };
+                    &temp[1..temp.len()-1]
+                } else {
+                    temp = tokens.rest().iter().map(|c| &*c.span).collect::<Vec<_>>().concat();
+                    temp.trim()
+                }
+            } else {
+                ""
+            };
+            let stmt = Statement::binary(std::fs::read(c).unwrap(), cmd.span.clone());
+            asm.append(stmt, target);
+        }
         "pad" => {
             let c = Expression::parse(&mut tokens, target);
             //asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
@@ -476,7 +533,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, if_inline: bool, target: &
                 asm.append(stmt, target);
             }
         }
-        _ => {}
+        c => println!("unknown command {}", c)
     }
 }
 fn parse_func_args(tokens: &mut TokenList, target: &mut Target) -> Vec<String> {

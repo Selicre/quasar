@@ -173,8 +173,13 @@ impl Assembler {
                         }
                     },
                     StatementKind::Skip => {}
+                    StatementKind::Binary { data } => {
+                        w.write_all(&data).unwrap();
+                        written.write_all(&data).unwrap();
+                    }
                     _ => {}
                 }
+                println!("{:X?} -> {:X?}", s, written);
                 if self.compare.len() > 0 {
                     let lhs = &written[..];
                     let rhs = &self.compare[s.offset..s.offset+s.size];
@@ -231,6 +236,9 @@ pub enum StatementKind {
     Print {
         expr: Expression
     },
+    Binary {
+        data: Vec<u8>
+    },
     Skip
 }
 
@@ -264,5 +272,9 @@ impl Statement {
     }
     pub fn skip(amt: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::Skip, amt, span)
+    }
+    pub fn binary(data: Vec<u8>, span: ContextStr) -> Self {
+        let len = data.len();
+        Statement::new(StatementKind::Binary { data }, len, span)
     }
 }

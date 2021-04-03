@@ -166,38 +166,69 @@ struct LabelCtx {
     pos: Vec<usize>,
 }
 
+#[derive(Copy,Clone,Debug,PartialEq,Eq)]
 enum CondLayer {
     IfTrue,
     IfFalse,
-    IfDone,
+    IfDone,     // used to designate being done with the current layer
+    IfSkip,     // used to skip over the if block entirely
     WhileTrue(usize),
     WhileFalse
+}
+
+impl CondLayer {
+    fn is_while(&self) -> bool {
+        matches!(self, CondLayer::WhileTrue(_)) || matches!(self, CondLayer::WhileFalse)
+    }
+    fn is_true(&self) -> bool {
+        matches!(self, CondLayer::IfTrue) || matches!(self, CondLayer::WhileTrue(_))
+    }
 }
 
 #[derive(Default)]
 struct ExecCtx {
     exec_ptr: usize,
-    if_stack: Vec<Option<usize>>,
-    if_depth: Option<usize>,
-    if_branch_done: bool,
+    if_stack: Vec<CondLayer>,
     if_inline: bool,
     rep_count: Option<usize>,
 }
 
 impl ExecCtx {
-    pub fn enabled(&self) -> bool {
-        self.if_depth.is_none()
+    fn enabled(&self) -> bool {
+        self.current().is_true()
     }
-    pub fn run_endif(&mut self) {
-        let depth = self.if_stack.len();
-        if let Some(c) = self.if_stack.pop().unwrap() {
-            if self.enabled() {
-                self.exec_ptr = c-1;
-                return;
-            }
+    fn skipping(&self) -> bool {
+        self.current() == CondLayer::IfSkip
+    }
+    fn current(&self) -> CondLayer {
+        self.if_stack.last().cloned().unwrap_or(CondLayer::IfTrue)
+    }
+    fn run_endif(&mut self) {
+        if let CondLayer::WhileTrue(c) = self.current() {
+            self.exec_ptr = c;
         }
-        if let Some(c) = self.if_depth {
-            if c == depth { self.if_depth = None; }
+        self.if_stack.pop();
+    }
+    fn enter_if(&mut self, cond: bool) {
+        self.if_stack.push(if cond { CondLayer::IfTrue } else { CondLayer::IfFalse });
+    }
+    fn enter_while(&mut self, cond: bool) {
+        self.if_stack.push(if cond { CondLayer::WhileTrue(self.exec_ptr-1) } else { CondLayer::WhileFalse });
+    }
+    fn enter_skip(&mut self) {
+        // If the current context is disabled, then the whole stack becomes disabled.
+        self.if_stack.push(CondLayer::IfSkip);
+    }
+    fn enter_elseif(&mut self, cond: bool) {
+        if let Some(c) = self.if_stack.last_mut() {
+            *c = match *c {
+                CondLayer::IfTrue => CondLayer::IfDone,
+                CondLayer::IfFalse if cond => CondLayer::IfTrue,
+                CondLayer::IfFalse => CondLayer::IfFalse,
+                c => c, // done, skip
+            }
+        } else {
+            panic!("elseif for while?");
         }
     }
 }

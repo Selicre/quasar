@@ -136,10 +136,11 @@ impl Assembler {
             let offset = ((addr&0x7F0000)>>1|(addr&0x7FFF));
 
             w.seek(SeekFrom::Start(offset));
-            let mut offset = 0;
+            let mut ch = 0;
             for s in i.stmts.iter() {
-                if offset != s.offset { println!("uh oh wrong offset: {} != {}", offset, s.offset); }
-                offset += s.size;
+                if ch != s.offset { println!("uh oh wrong offset: {} != {}", ch, s.offset); }
+                ch += s.size;
+                w.seek(SeekFrom::Start(offset + s.offset as u64));
                 let mut written = vec![];
                 match &s.kind {
                     StatementKind::Print { expr } => {
@@ -198,7 +199,7 @@ impl Assembler {
                     }
                     _ => {}
                 }
-                println!("{:X?} -> {:X?}", s, written);
+                println!("{:06X} {:X?} -> {:X?}", offset + s.offset as u64, s, written);
                 if self.compare.len() > 0 {
                     let lhs = &written[..];
                     let rhs = &self.compare[s.offset..s.offset+s.size];

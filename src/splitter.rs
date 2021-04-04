@@ -49,7 +49,7 @@ fn split_lines(line: &mut ContextStr) -> Option<ContextStr> {
             }
         };
         let stmt = line.advance(next_line);
-        if stmt.ends_with("\\") || stmt.ends_with(",") {
+        if !stmt.contains(";") && (stmt.ends_with("\\") || stmt.ends_with(",")) {
             line.advance(1);
             continue;
         }

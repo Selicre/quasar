@@ -36,9 +36,9 @@ impl Expression {
     }
     pub fn label_offset(span: ContextStr, label: usize, value: f64) -> Self {
         Self { nodes: vec![
-            (span.clone(), ExprNode::Value(Value::Label(label))),
             (span.clone(), ExprNode::Value(Value::Literal { value, size_hint: 0 })),
-            (span, ExprNode::Binop(Binop::Add)),
+            (span.clone(), ExprNode::Value(Value::Label(label))),
+            (span, ExprNode::Binop(Binop::LabelOffset)),
         ] }
     }
     pub fn block_move(span: ContextStr, arg1: Expression, mut arg2: Expression) -> Self {
@@ -153,7 +153,8 @@ pub enum Binop {
     And,
     Or,
     // internal
-    BlockMove
+    BlockMove,
+    LabelOffset,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -176,7 +177,7 @@ impl Binop {
             BitAnd | BitOr | BitXor => (4,5),
             Eq | Ne | Gt | Ge | Lt | Le => (2,3),
             And | Or => (0,1),
-            BlockMove => unreachable!(),
+            _ => unreachable!(),
         }
     }
     fn exec(&self, span: &ContextStr, l: f64, r: f64, target: &mut Target) -> f64 {
@@ -213,7 +214,8 @@ impl Binop {
             Le => from_bool(l <= r),
             And =>from_bool((l != 0.0) && (r != 0.0)),
             Or => from_bool((l != 0.0) || (r != 0.0)),
-            BlockMove => (((li & 0xFF) << 8) | (ri & 0xFF)) as f64,
+            BlockMove => (((ri & 0xFF) << 8) | (li & 0xFF)) as f64,
+            LabelOffset => (ri + (li&0x7FFF) + ((li&0xFF8000) << 1)) as f64
         }
     }
 }

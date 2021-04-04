@@ -16,6 +16,7 @@ pub struct Segment {
     start: StartKind,
     label_id: usize,
     offset: usize,
+    base_offset: Option<usize>,
     span: ContextStr,
     stmts: Vec<Statement>
 }
@@ -23,12 +24,16 @@ pub struct Segment {
 impl Segment {
     pub fn new(span: ContextStr, label_id: usize, start: StartKind) -> Self {
         Segment {
-            start, label_id, offset: 0, span, stmts: vec![],
+            start, label_id, offset: 0, base_offset: None, span, stmts: vec![],
         }
     }
     pub fn push(&mut self, mut stmt: Statement) -> &Statement {
         stmt.offset = self.offset;
+        stmt.base = self.base_offset;
         self.offset += stmt.size;
+        self.base_offset.as_mut().map(|c| {
+            *c += stmt.size;
+        });
         self.stmts.push(stmt);
         self.stmts.last().unwrap()
     }
@@ -56,7 +61,7 @@ impl Assembler {
                 let start = seg.stmts[s].offset;
                 let other = seg.stmts[s+1..].iter().find(|c| matches!(c.kind, StatementKind::Label(_)));
                 let end = other.unwrap_or_else(|| {
-                    target.push_warning(span, 0, "datasize function used on the last label of a segment".into());
+                    target.push_warning(span, 0, "`datasize` used on the last label of a segment".into());
                     seg.stmts.last().unwrap()
                 }).offset;
                 return Some((end - start) as _)
@@ -90,10 +95,20 @@ impl Assembler {
         let stmt = seg.push(stmt);
         match &stmt.kind {
             StatementKind::Label(id) => {
-                let expr = Expression::label_offset(stmt.span.clone(), label_id, stmt.offset as _);
-                let span = stmt.span.clone();
-                let id = *id;
-                self.set_label(id, expr, span, target);
+                if let Some(base) = stmt.base {
+                    let expr = Expression::value(stmt.span.clone(), base as _);
+                    let span = stmt.span.clone();
+                    let id = *id;
+                    self.set_label(id, expr, span, target);
+                } else {
+                    let expr = Expression::label_offset(stmt.span.clone(), label_id, stmt.offset as _);
+                    let span = stmt.span.clone();
+                    let id = *id;
+                    self.set_label(id, expr, span, target);
+                }
+            }
+            StatementKind::Base { expr } => {
+                seg.base_offset = *expr;
             }
             _ => {},
         }
@@ -150,7 +165,11 @@ impl Assembler {
                         //println!("rel val: {}", val);
                         if expr.contains_label() {
                             // actually make relative
-                            val = val.wrapping_sub(addr as u32 + s.offset as u32 + s.size as u32);
+                            if let Some(base) = s.base {
+                                val = val.wrapping_sub(base as u32 + s.offset as u32);
+                            } else {
+                                val = val.wrapping_sub(addr as u32 + s.offset as u32 + s.size as u32);
+                            }
                         }
                         let val = val.to_le_bytes();
                         w.write_all(&val[..s.size-1]).unwrap();
@@ -202,7 +221,8 @@ impl Assembler {
 
 #[derive(Debug)]
 pub struct Statement {
-    pub offset: usize,  // from the start of the segment
+    pub offset: usize,          // from the start of the segment
+    pub base: Option<usize>,    // if some, then this is used as the absolute value
     pub kind: StatementKind,
     pub size: usize,
     pub span: ContextStr
@@ -239,13 +259,16 @@ pub enum StatementKind {
     Binary {
         data: Vec<u8>
     },
-    Skip
+    Skip,
+    Base {
+        expr: Option<usize>
+    }
 }
 
 impl Statement {
     pub fn new(kind: StatementKind, size: usize, span: ContextStr) -> Self {
         Self {
-            offset: 0, size, kind, span
+            offset: 0, base: None, size, kind, span
         }
     }
     pub fn print(expr: Expression, span: ContextStr) -> Self {
@@ -272,6 +295,9 @@ impl Statement {
     }
     pub fn skip(amt: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::Skip, amt, span)
+    }
+    pub fn base(expr: Option<usize>, span: ContextStr) -> Self {
+        Statement::new(StatementKind::Base { expr }, 0, span)
     }
     pub fn binary(data: Vec<u8>, span: ContextStr) -> Self {
         let len = data.len();

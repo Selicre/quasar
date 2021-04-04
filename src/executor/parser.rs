@@ -515,7 +515,18 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         }
         "pad" => {
             let c = Expression::parse(&mut tokens, target);
-            //asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+            asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+        }
+        "base" => {
+            let val = if tokens.peek_non_wsp().unwrap().span.eq("off") {
+                None
+            } else {
+                let expr = Expression::parse(&mut tokens, target);
+                let mut base = expr.eval_const(target) as usize;
+                Some(base)
+            };
+            let stmt = Statement::base(val, cmd.span.clone());
+            asm.append(stmt, target);
         }
         "print" => {
             //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());

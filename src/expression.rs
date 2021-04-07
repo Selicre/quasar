@@ -115,14 +115,14 @@ impl Value {
 
 #[derive(Clone,Debug,PartialEq,Eq,Hash)]
 pub enum Label {
-    Named { stack: Vec<String> },
-    AnonPos { depth: usize, pos: usize },
-    AnonNeg { depth: usize, pos: usize },
+    Named { stack: Vec<String>, invoke: Option<usize> },
+    AnonPos { depth: usize, pos: usize, invoke: Option<usize> },
+    AnonNeg { depth: usize, pos: usize, invoke: Option<usize> },
     Segment(usize)
 }
 impl Label {
     pub fn no_colon(&self) -> bool {
-        if let Label::Named { ref stack } = self {
+        if let Label::Named { ref stack, .. } = self {
             stack.len() > 1
         } else {
             true

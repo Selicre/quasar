@@ -79,7 +79,12 @@ pub(super) fn exec_stmt(
         }
 
         let name = def.as_define().unwrap();
-        if exp_defines { expand_defines(&mut v, &i, target); }
+        if macro_args.len() != 0 {
+            expand_macro_args(&mut v, macro_args, &i, target);
+        }
+        if exp_defines {
+            expand_defines(&mut v, &i, target);
+        }
         if do_math {
             let mut t = TokenList::new(&v);
             let expr = Expression::parse(&mut t, target);
@@ -184,7 +189,7 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
 
 
 pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
-    if false {
+    if true {
         print!("{} ", if ctx.enabled() { "+" } else { " " });
         for i in tokens.rest().iter() {
             print!("{}", i.span);
@@ -196,14 +201,13 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
         let mut peek = tokens.clone();
         // Parse labels
         if let Some(c) = expression::parse_label(&mut peek, false, target) {
-            let ate_colon = peek.peek().map(|n| &*n.span == ":").unwrap_or(false);
+            let ate_colon = peek.peek().map(|n| n.span.eq(":")).unwrap_or(false);
             if ate_colon { peek.next(); }
             if c.1.no_colon() || ate_colon {
                 tokens = peek;
                 if ctx.enabled() {
                     let id = target.set_label(c.1, c.0.clone());
                     asm.append(Statement::label(id, c.0), target);
-                } else {
                 }
                 continue;
             }
@@ -211,10 +215,13 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
         break;
     }
 
-    if ctx.enabled() {
-        exec_enabled(tokens, newline, target, ctx, asm);
-    } else {
-        exec_disabled(tokens, newline, target, ctx, asm);
+    let rep = ctx.rep_count.take().unwrap_or(1);
+    for c in 0..rep {
+        if ctx.enabled() {
+            exec_enabled(tokens.clone(), newline, target, ctx, asm);
+        } else {
+            exec_disabled(tokens.clone(), newline, target, ctx, asm);
+        }
     }
     if ctx.if_inline && newline {
         ctx.if_inline = false;
@@ -298,7 +305,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
 
     if matches!(tokens.peek_non_wsp(), Some(c) if &*c.span == "=") {
         tokens.next_non_wsp();
-        let id = target.label_id(Label::Named { stack: vec![cmd.span.to_string()] });
+        let id = target.label_id(Label::Named { stack: vec![cmd.span.to_string()], invoke: None });
         let expr = Expression::parse(&mut tokens, target);
         asm.set_label(id, expr, cmd.span.clone(), target);
         return;
@@ -438,6 +445,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             }
             let expr = Expression::parse(&mut tokens, target);
             let mut count = expr.eval_const(target);
+            println!("rep expr: {:?}", expr);
             if count < 0.0 { count = 0.0; }
             ctx.rep_count = Some(count as usize);
         }

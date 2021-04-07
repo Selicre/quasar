@@ -190,14 +190,15 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             }
         } else if c == '\\' {
             let needle = input.needle();
-            if input.skip_if("\\!") || input.skip_if("\\\\") {
+            if input.skip_if("\\!") { //|| input.skip_if("\\\\") {
                 let span = input.prefix_from(needle);
                 out.push(Token { span, kind: TokenKind::Symbol });
             } else if input.skip_if("\\\n") {
                 // do nothing
             } else {
-                target.push_error(input.clone(), 10, format!("Stray escape sequence {}", input));
-                return vec![]
+                let span = input.advance(1);
+                target.push_warning(span.clone(), 10, format!("Stray backslash"));
+                out.push(Token { span, kind: TokenKind::Symbol });
             }
         } else if c == '+' || c == '-' || c == '.' {
             let span = input.advance_some(input.find(|n: char| n != c));

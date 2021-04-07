@@ -22,6 +22,8 @@ pub struct Target {
     defines: HashMap<String, Vec<Token>>,
     macros: HashMap<String, Macro>,
     cur_macro: Option<(String, Macro)>,
+    macro_label_ctx: Vec<(usize, LabelCtx)>,    // (invoke_id, label_ctx)
+    macro_invoke: usize,
     functions: HashMap<String, (usize, Expression)>,
     label_idx: IndexSet<Label>,
     label_ctx: LabelCtx,
@@ -36,6 +38,8 @@ impl Target {
             defines: HashMap::new(),
             functions: HashMap::new(),
             macros: HashMap::new(),
+            macro_label_ctx: vec![],
+            macro_invoke: 0,
             cur_macro: None,
             label_idx: IndexSet::new(),
             label_ctx: LabelCtx::default(),
@@ -66,6 +70,7 @@ impl Target {
     pub fn clear_messages(&mut self) {
         self.messages.clear()
     }
+    pub fn macro_invoke(&self) -> Option<usize> { self.macro_label_ctx.last().map(|c| c.0) }
     pub fn has_error(&self) -> bool { self.has_error }
     pub fn defines(&self) -> &HashMap<String, Vec<Token>> { &self.defines }
     pub fn label_id(&mut self, label: Label) -> usize {
@@ -90,6 +95,7 @@ impl Target {
     }
     pub fn finish_macro(&mut self) {
         let m = self.cur_macro.take().unwrap();
+        println!("got macro: {:?}", m.1.blocks);
         self.macros.insert(m.0, m.1);
     }
     pub fn get_macro(&self, name: &str) -> Option<&Macro> {
@@ -98,27 +104,41 @@ impl Target {
     pub fn labels(&self) -> &IndexSet<Label> {
         &self.label_idx
     }
+    fn label_ctx(&mut self, is_macro: Option<usize>) -> &mut LabelCtx {
+        if let Some(c) = is_macro {
+            if let Some((d,e)) = self.macro_label_ctx.last_mut() {
+                if *d != c { panic!("uhhh internal error with macros ({} != {})", d, c); }
+                e
+            } else {
+                panic!("not in a macro");
+            }
+        } else {
+            &mut self.label_ctx
+        }
+    }
     pub fn set_label(&mut self, mut label: Label, context: ContextStr) -> usize {
         match &mut label {
-            Label::Named { stack } => self.label_ctx.named = stack.clone(),
-            Label::AnonPos { depth, pos } => {
-                if self.label_ctx.pos.len() <= *depth {
-                    self.label_ctx.pos.resize(*depth+1, 0);
+            Label::Named { stack, invoke } => self.label_ctx(*invoke).named = stack.clone(),
+            Label::AnonPos { depth, pos, invoke } => {
+                let lc = self.label_ctx(*invoke);
+                if lc.pos.len() <= *depth {
+                    lc.pos.resize(*depth+1, 0);
                 }
-                self.label_ctx.pos[*depth] += 1;
-                *pos = self.label_ctx.pos[*depth];
+                lc.pos[*depth] += 1;
+                *pos = lc.pos[*depth];
             }
-            Label::AnonNeg { depth, pos } => {
-                if self.label_ctx.neg.len() <= *depth {
-                    self.label_ctx.neg.resize(*depth+1, 0);
+            Label::AnonNeg { depth, pos, invoke } => {
+                let lc = self.label_ctx(*invoke);
+                if lc.neg.len() <= *depth {
+                    lc.neg.resize(*depth+1, 0);
                 }
-                self.label_ctx.neg[*depth] += 1;
-                *pos = self.label_ctx.neg[*depth];
+                lc.neg[*depth] += 1;
+                *pos = lc.neg[*depth];
             },
             _ => {}
         }
         let (id, _) = self.label_idx.insert_full(label.clone());
-        //println!("set label {} to {:?}", id, label);
+        println!("set label {} to {:?}", id, label);
         id
     }
     pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
@@ -265,10 +285,7 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
 
     let mut ctx = ExecCtx::default();
     while let Some((i, newline)) = file.stmt(ctx.exec_ptr) {
-        let rep = ctx.rep_count.take().unwrap_or(1);
-        for _ in 0..rep {
-            exec_stmt(i.clone(), newline, target, &mut ctx, &HashMap::new(), asm);
-        }
+        exec_stmt(i.clone(), newline, target, &mut ctx, &HashMap::new(), asm);
         ctx.exec_ptr += 1;
     }
     target.profiler(&format!("done {}", ff));
@@ -284,13 +301,13 @@ pub fn exec_macro(name: &str, args: Vec<Vec<Token>>, source: ContextStr, target:
     let mut ctx = ExecCtx::default();
     let mac = target.get_macro(name).unwrap().clone();
     let args = mac.args.iter().cloned().zip(args.into_iter()).collect::<HashMap<_,_>>();
+    target.macro_label_ctx.push((target.macro_invoke, LabelCtx::default()));
+    target.macro_invoke += 1;
     while let Some((i, newline)) = mac.blocks.get(ctx.exec_ptr) {
-        let rep = ctx.rep_count.take().unwrap_or(1);
-        for _ in 0..rep {
-            exec_stmt(i.clone(), *newline, target, &mut ctx, &args, asm);
-        }
+        exec_stmt(i.clone(), *newline, target, &mut ctx, &args, asm);
         ctx.exec_ptr += 1;
     }
+    target.macro_label_ctx.pop();
 }
 
 pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &mut Target) -> bool {

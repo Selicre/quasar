@@ -34,22 +34,24 @@ pub fn parse_ident(tokens: &mut TokenList<'_>, has_macro: bool, target: &mut Tar
 pub fn parse_label(tokens: &mut TokenList<'_>, has_macro: bool, target: &mut Target) -> Option<(ContextStr, Label)> {
     let mut peek = tokens.clone();
     let t = peek.next_non_wsp()?;
+    let invoke = if has_macro { Some(target.macro_invoke().expect("macro label outside of macro")) } else { None };
     let t = match t.kind {
         TokenKind::Ident => {
-            let id = Label::Named { stack: vec![t.span.to_string()] };
+            let id = Label::Named { stack: vec![t.span.to_string()], invoke };
             (t.span.clone(), id)
         }
         TokenKind::Symbol => {
             match t.span.chars().next().expect("Symbol with no chars?") {
                 '?' if !has_macro => {
-                    parse_label(tokens, true, target)?
+                    *tokens = peek;
+                    return parse_label(tokens, true, target);
                 },
                 '.' => {
                     let mut depth = t.span.len();
                     let c = peek.next();
                     if let Some(c) = c {
                         if c.is_ident() {
-                            (c.span.clone(), Label::Named { stack: target.resolve_sub(depth, c.span.clone()) })
+                            (c.span.clone(), Label::Named { stack: target.resolve_sub(depth, c.span.clone()), invoke })
                         } else {
                             return None;
                         }
@@ -59,11 +61,11 @@ pub fn parse_label(tokens: &mut TokenList<'_>, has_macro: bool, target: &mut Tar
                 },
                 '+' => {
                     let mut depth = t.span.len();
-                    (t.span.clone(), Label::AnonPos { depth, pos: target.resolve_anon(depth, true, t.span.clone()) })
+                    (t.span.clone(), Label::AnonPos { depth, pos: target.resolve_anon(depth, true, t.span.clone()), invoke })
                 },
                 '-' => {
                     let mut depth = t.span.len();
-                    (t.span.clone(), Label::AnonNeg { depth, pos: target.resolve_anon(depth, false, t.span.clone()) })
+                    (t.span.clone(), Label::AnonNeg { depth, pos: target.resolve_anon(depth, false, t.span.clone()), invoke })
                 },
                 _ => return None
             }
@@ -324,7 +326,7 @@ impl Expression {
                 ExprNode::Value(Value::Label(c)) => {
                     // replace arguments
                     // this isn't as clean as I'd hope it would be but it is not invasive
-                    if let Some(Label::Named { stack }) = target.label_name(c) {
+                    if let Some(Label::Named { stack, .. }) = target.label_name(c) {
                         if stack.len() == 1 {
                             if let Some(c) = arguments.iter().position(|c| &stack[0] == c) {
                                 i.1 = ExprNode::FuncArg(c);

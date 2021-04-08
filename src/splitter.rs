@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::collections::HashMap;
 
 use crate::context::{LineInfo, LocalContext, ContextStr};
-use crate::message::Message;
+use crate::message::errors;
 
 use crate::executor::Target;
 
@@ -64,7 +64,7 @@ pub fn parse_line(mut line: ContextStr, target: &mut Target, stmts: &mut Vec<Blo
     if let Some(idx) = line.find(';') {
         let l = line.advance(idx);
         if let Some(c) = line.strip_prefix(";@") {
-            target.push_info(line.clone(), 0, format!("Special command: {}", c));
+            //target.push_info(line.clone(), 0, format!("Special command: {}", c));
         }
         line = l;
     }
@@ -87,7 +87,7 @@ pub fn parse_line(mut line: ContextStr, target: &mut Target, stmts: &mut Vec<Blo
                     }
                 } else {
                     let mut stmt = line.prefix_from(str_needle);
-                    target.push_error(stmt, 5, format!("Unclosed string literal"));
+                    errors::str_literal_unclosed(stmt);
                     return;
                 }
             }

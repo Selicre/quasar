@@ -61,7 +61,7 @@ impl Assembler {
                 let start = seg.stmts[s].offset;
                 let other = seg.stmts[s+1..].iter().find(|c| matches!(c.kind, StatementKind::Label(_)));
                 let end = other.unwrap_or_else(|| {
-                    target.push_warning(span, 0, "`datasize` used on the last label of a segment".into());
+                    Message::warning(span, "`datasize` used on the last label of a segment".into()).push();
                     seg.stmts.last().unwrap()
                 }).offset;
                 return Some((end - start) as _)
@@ -83,7 +83,7 @@ impl Assembler {
     }
     pub fn append(&mut self, stmt: Statement, target: &mut Target) {
         if self.segments.len() == 0 {
-            target.push_msg(Message::warning(stmt.span.clone(), 0, "Missing `org` or `freespace` command".into()));
+            Message::warning(stmt.span.clone(), "Missing `org` or `freespace` command".into()).push();
             self.new_segment(
                 stmt.span.clone(),
                 StartKind::Expression(Expression::value(stmt.span.clone(), 0x8000 as _)),

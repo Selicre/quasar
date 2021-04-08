@@ -12,17 +12,22 @@ pub(super) fn exec_stmt(
 
     if tokens.len() == 0 { return; }
 
-    // macro support is really stupid!
     if &*tokens[0].span == "macro" && ctx.enabled() {
         if target.cur_macro.is_some() {
-            target.push_error(tokens[0].span.clone(), 0, format!("Nested macro definition"));
+            errors::macro_nested_def(tokens[0].span.clone());
             return;
         }
         let mut tokens = TokenList::new(&tokens);
-        let _ = tokens.next_non_wsp();
-        let name = tokens.next_non_wsp().unwrap();
-        if !name.is_ident() { panic!(); }
-        let args = parse_func_args(&mut tokens, target);
+        let macro_token = tokens.next_non_wsp().unwrap();
+        let name = if let Some(n) = tokens.next_non_wsp() { n } else {
+            errors::macro_def_no_name(macro_token.span.clone());
+            return;
+        };
+        if !name.is_ident() {
+            errors::macro_def_no_name(name.span.clone());
+            return;
+        }
+        let args = if let Some(c) = parse_func_args(&mut tokens, target) { c } else { return; };
         target.start_macro(name.span.to_string(), args);
         return;
     }
@@ -42,10 +47,15 @@ pub(super) fn exec_stmt(
             if def.is_define()
             && ws1.is_whitespace()
             && op.is_symbol()
+            && {
+                let x = &op.span;
+                x.eq("=") || x.eq(":=") || x.eq("?=") || x.eq("+=") || x.eq("#=")
+            }
             && ws2.is_whitespace()) {
         // mostly for endifs to work properly
+        let enabled = ctx.enabled();
         exec_cmd(TokenList::new(&[]), newline, target, ctx, asm);
-        if !ctx.enabled() { return; }
+        if !enabled { return; }
         let def = &tokens[0];
         let op = &tokens[2];
 
@@ -60,7 +70,6 @@ pub(super) fn exec_stmt(
             "+=" => append = true,
             "#=" => { do_math = true; exp_defines = true; },
             _ => {
-                target.push_error(op.span.clone(), 9, format!("Unknown define operator"));
                 return;
             }
         }
@@ -70,7 +79,7 @@ pub(super) fn exec_stmt(
             if tokens.len() > 5 {
                 let mut value = i.clone();
                 value.advance(tokens[5].span.start() - i.start());
-                target.push_error(value, 7, format!("Trailing characters at the end of define"));
+                errors::define_trailing_chars(value);
                 return;
             }
             v = lexer::tokenize_stmt(ctx, target, false);
@@ -89,7 +98,8 @@ pub(super) fn exec_stmt(
             let mut t = TokenList::new(&v);
             let expr = Expression::parse(&mut t, target);
             let value = expr.eval_const(target);
-            target.defines.insert(name.to_string(), vec![Token::from_number(def.span.clone(), value as _)]);
+            let span = ContextStr::new(value.to_string(), LineInfo::custom(format!("<define at {}>", tokens[4].span.source().short())));
+            target.defines.insert(name.to_string(), vec![Token::from_number(span, value as _)]);
             return;
         }
 
@@ -157,7 +167,7 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
     // TODO: this is kinda really hacky, but if you do this you do not deserve good diagnostics
     let mut cur = 0;
     while cur < tokens.len() {
-        if !(tokens[cur].is_ident() || (tokens[cur].is_define() && !tokens[cur].is_define_escaped().unwrap())) {
+        if !tokens[cur].is_ident() && !(tokens[cur].is_define() && !tokens[cur].is_define_escaped().unwrap()) {
             cur += 1;
             continue;
         }
@@ -192,7 +202,7 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
     if true {
         print!("{} ", if ctx.enabled() { "+" } else { " " });
         for i in tokens.rest().iter() {
-            print!("{}", i.span);
+            print!("{:?} ", i.span);
         }
         println!(" {:?}", ctx.if_stack);
     }
@@ -225,7 +235,9 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
     }
     if ctx.if_inline && newline {
         ctx.if_inline = false;
-        ctx.run_endif();
+        if !tokens.peek_non_wsp().map(|c| c.span.eq("endif")).unwrap_or(false) {
+            ctx.run_endif();
+        }
     }
 }
 fn exec_disabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
@@ -235,21 +247,13 @@ fn exec_disabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx:
         "if" => ctx.enter_skip(),
         "while" => ctx.enter_skip(),
         "elseif" if !ctx.skipping() => {
-            if ctx.if_inline {
-                target.push_msg(Message::error(cmd.span.clone(), 19, format!("`elseif` within inline `if`"))
-                    .with_help(format!("inline `if` statements can't use `elseif`"))
-                    .with_help(format!("remove the `elseif`")));
-                return;
-            }
             if ctx.if_stack.len() == 0 {
-                target.push_msg(Message::error(cmd.span.clone(), 20, format!("Stray `elseif`"))
-                    .with_help(format!("change `elseif` to `if`")));
+                errors::stray_elseif(cmd.span.clone());
                 return;
             }
             // Are we in a while loop?
             if ctx.if_stack.last().unwrap().is_while() {
-                target.push_msg(Message::error(cmd.span.clone(), 21, format!("`elseif` after a `while` loop"))
-                    .with_help(format!("remove `elseif`")));
+                errors::else_after_while(cmd.span.clone(), "elseif");
                 return;
             }
             if let Some(_) = tokens.peek_non_wsp() {
@@ -257,41 +261,25 @@ fn exec_disabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx:
                 let val = expr.eval_const(target);
                 ctx.enter_elseif(val != 0.0);
             } else {
-                target.push_msg(Message::error(cmd.span.clone(), 13, format!("`elseif` statement with no condition"))
-                    .with_help(format!("add a condition, like `if 2+2 == 4`")));
+                errors::if_no_condition(cmd.span.clone(), "elseif");
                 return;
             }
         }
         "else" if !ctx.skipping() => {
-            if ctx.if_inline {
-                target.push_msg(Message::error(cmd.span.clone(), 22, format!("`else` within inline `if`"))
-                    .with_help(format!("inline `if` statements can't use `else`"))
-                    .with_help(format!("remove the `else`")));
-                return;
-            }
             if ctx.if_stack.len() == 0 {
-                target.push_msg(Message::error(cmd.span.clone(), 23, format!("Stray `else`"))
-                    .with_help(format!("remove `else`")));
+                errors::stray_else(cmd.span.clone());
                 return;
             }
             // Are we in a while loop?
             if ctx.if_stack.last().unwrap().is_while() {
-                target.push_msg(Message::error(cmd.span.clone(), 24, format!("`else` after a `while` loop"))
-                    .with_help(format!("remove `else`")));
+                errors::else_after_while(cmd.span.clone(), "else");
                 return;
             }
             ctx.enter_elseif(true);
         }
         "endif" => {
-            if ctx.if_inline {
-                target.push_msg(Message::error(cmd.span.clone(), 14, format!("`endif` within inline `if`"))
-                    .with_help(format!("inline `if` statements have an implicit `endif` at the end"))
-                    .with_help(format!("remove the `endif`")));
-                return;
-            }
             if ctx.if_stack.len() == 0 {
-                target.push_msg(Message::error(cmd.span.clone(), 15, format!("Stray `endif`"))
-                    .with_help(format!("remove the `endif` or put an appropriate `if` statement above it")));
+                errors::stray_endif(cmd.span.clone());
                 return;
             }
             ctx.run_endif();
@@ -318,8 +306,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 ctx.enter_if(val != 0.0);
                 ctx.if_inline = !newline;
             } else {
-                target.push_msg(Message::error(cmd.span.clone(), 13, format!("`if` statement with no condition"))
-                    .with_help(format!("add a condition, like `if 2+2 == 4`")));
+                errors::if_no_condition(cmd.span.clone(), "if");
                 return;
             }
         }
@@ -330,27 +317,18 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 ctx.enter_while(val != 0.0);
                 ctx.if_inline = !newline;
             } else {
-                target.push_msg(Message::error(cmd.span.clone(), 16, format!("`while` statement with no condition"))
-                    .with_help(format!("add a condition, like `while 2+2 == 4`")));
+                errors::if_no_condition(cmd.span.clone(), "while");
                 return;
             }
         }
         "elseif" => {
-            if ctx.if_inline {
-                target.push_msg(Message::error(cmd.span.clone(), 19, format!("`elseif` within inline `if`"))
-                    .with_help(format!("inline `if` statements can't use `elseif`"))
-                    .with_help(format!("remove the `elseif`")));
-                return;
-            }
             if ctx.if_stack.len() == 0 {
-                target.push_msg(Message::error(cmd.span.clone(), 20, format!("Stray `elseif`"))
-                    .with_help(format!("change `elseif` to `if`")));
+                errors::stray_elseif(cmd.span.clone());
                 return;
             }
             // Are we in a while loop?
             if ctx.if_stack.last().unwrap().is_while() {
-                target.push_msg(Message::error(cmd.span.clone(), 21, format!("`elseif` after a `while` loop"))
-                    .with_help(format!("remove `elseif`")));
+                errors::else_after_while(cmd.span.clone(), "elseif");
                 return;
             }
             if let Some(_) = tokens.peek_non_wsp() {
@@ -358,55 +336,44 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 let val = expr.eval_const(target);
                 ctx.enter_elseif(val != 0.0);
             } else {
-                target.push_msg(Message::error(cmd.span.clone(), 13, format!("`elseif` statement with no condition"))
-                    .with_help(format!("add a condition, like `if 2+2 == 4`")));
+                errors::if_no_condition(cmd.span.clone(), "elseif");
                 return;
             }
         }
         "else" => {
-            if ctx.if_inline {
-                target.push_msg(Message::error(cmd.span.clone(), 22, format!("`else` within inline `if`"))
-                    .with_help(format!("inline `if` statements can't use `else`"))
-                    .with_help(format!("remove the `else`")));
-                return;
-            }
             if ctx.if_stack.len() == 0 {
-                target.push_msg(Message::error(cmd.span.clone(), 23, format!("Stray `else`"))
-                    .with_help(format!("remove `else`")));
+                errors::stray_else(cmd.span.clone());
                 return;
             }
             // Are we in a while loop?
             if ctx.if_stack.last().unwrap().is_while() {
-                target.push_msg(Message::error(cmd.span.clone(), 24, format!("`else` after a `while` loop"))
-                    .with_help(format!("remove `else`")));
+                errors::else_after_while(cmd.span.clone(), "else");
                 return;
             }
             ctx.enter_elseif(true);
         }
         "endif" => {
-            if ctx.if_inline {
-                target.push_msg(Message::error(cmd.span.clone(), 14, format!("`endif` within inline `if`"))
-                    .with_help(format!("inline `if` statements have an implicit `endif` at the end"))
-                    .with_help(format!("remove the `endif`")));
-                return;
-            }
             if ctx.if_stack.len() == 0 {
-                target.push_msg(Message::error(cmd.span.clone(), 15, format!("Stray `endif`"))
-                    .with_help(format!("remove the `endif` or put an appropriate `if` statement above it")));
+                errors::stray_endif(cmd.span.clone());
                 return;
             }
             ctx.run_endif();
         }
         "%" => {
-            let name = if let Some(n) = tokens.next_non_wsp() { n } else {
-                target.push_msg(Message::error(cmd.span.clone(), 0, format!("macro call with no name"))
-                    .with_help(format!("add a macro name, like `%test()`")));
-                return;
+            let name = match tokens.next_non_wsp() {
+                Some(n) if n.is_ident() => n,
+                _ => { errors::macro_no_name(cmd.span.clone()); return; }
             };
-            if !tokens.next_non_wsp().unwrap().span.eq("(") { panic!(); }
+            if !tokens.next_non_wsp().unwrap().span.eq("(") {
+                errors::macro_malformed(cmd.span.clone()); return;
+            }
             let mut macro_args = vec![vec![]];
             loop {
-                let t = tokens.next_non_wsp().unwrap();
+                let t = if let Some(t) = tokens.next_non_wsp() {
+                    t
+                } else {
+                    errors::macro_malformed(cmd.span.clone()); return;
+                };
                 if t.is_string() {
                     if macro_args.last_mut().unwrap().len() == 0 {
                         // TODO: expand macro args too
@@ -427,20 +394,31 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         }
         "function" => {
             let name = if let Some(n) = tokens.next_non_wsp() { n } else {
-                target.push_msg(Message::error(cmd.span.clone(), 0, format!("`function` statement with no function name"))
-                    .with_help(format!("add a function name and body, like `function test(a) = a+2`")));
+                errors::function_no_name(cmd.span.clone());
                 return;
             };
-            let args = parse_func_args(&mut tokens, target);
-            let eq = tokens.next_non_wsp().unwrap();
-            assert_eq!(&*eq.span, "=");
+            if !name.is_ident() {
+                errors::function_no_name(name.span.clone());
+                return;
+            }
+            let args = if let Some(c) = parse_func_args(&mut tokens, target) { c } else {
+                return;
+            };
+            let eq = tokens.next_non_wsp();
+            if eq.map_or(true, |c| !c.span.eq("=")) {
+                errors::function_no_eq(tokens.prev().unwrap().span.clone());
+                return;
+            }
             let expr = Expression::parse_fn_body(&args, &mut tokens, target);
+            if expr.is_empty() {
+                errors::function_empty(cmd.span.clone());
+                return;
+            }
             target.add_function(name.span.to_string(), args.len(), expr);
         }
-        "rep" if !tokens.peek_non_wsp().map(|c| c.span.eq("#")).unwrap_or(true) => {
+        "rep" if !tokens.peek_non_wsp().map_or(true, |c| c.span.eq("#")) => {
             if tokens.peek_non_wsp().is_none() {
-                target.push_msg(Message::error(cmd.span.clone(), 17, format!("`repeat` statement with no loop count"))
-                    .with_help(format!("add a loop count, like `repeat 5`")));
+                errors::cmd_no_arg(cmd.span.clone(), "rep", "repeat count", "5");
                 return;
             }
             let expr = Expression::parse(&mut tokens, target);
@@ -451,8 +429,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         }
         "skip" => {
             if tokens.peek_non_wsp().is_none() {
-                target.push_msg(Message::error(cmd.span.clone(), 17, format!("`skip` statement with no skip count"))
-                    .with_help(format!("add a skip count, like `skip 5`")));
+                errors::cmd_no_arg(cmd.span.clone(), "skip", "skip count", "5");
                 return;
             }
             let expr = Expression::parse(&mut tokens, target);
@@ -473,16 +450,17 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                     temp.trim()
                 }
             } else {
-                ""
+                errors::cmd_no_arg(cmd.span.clone(), "incsrc", "filename", "\"other.asm\"");
+                return;
             };
             exec_file(c.into(), cmd.span.clone(), target, asm);
         }
         "db" | "dw" | "dl" | "dd" => {
             let size = match &*cmd.span { "db" => 1, "dw" => 2, "dl" => 3, "dd" => 4, _ => 0 };
             loop {
-                if tokens.peek_non_wsp().map(|c| c.is_string()).unwrap_or(false) {
+                if tokens.peek_non_wsp().map_or(false, |c| c.is_string()) {
                     let s = tokens.next_non_wsp().unwrap();
-                    let c = lexer::expand_str(s.span.clone(), target).unwrap_or("".into());
+                    let c = if let Some(c) = lexer::expand_str(s.span.clone(), target) { c } else { return; };
                     let c = lexer::display_str(&c);
                     let stmt = Statement::data_str(c, size, cmd.span.clone());
                     asm.append(stmt, target);
@@ -496,14 +474,20 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                     Some(c) if &*c.span == "," => continue,
                     None => break,
                     Some(c) => {
-                        target.push_msg(Message::error(c.span.clone(), 0, format!("Unknown separator"))); break; 
+                        errors::cmd_unknown_sep(c.span.clone());
+                        break;
                     }
                 }
             }
         }
         "org" => {
-            let c = Expression::parse(&mut tokens, target);
-            asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+            if let Some(c) = tokens.peek_non_wsp() {
+                let c = Expression::parse(&mut tokens, target);
+                asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+            } else {
+                errors::cmd_no_arg(cmd.span.clone(), "org", "address", "$008000");
+                return;
+            }
         }
         "incbin" => {
             let temp;
@@ -522,16 +506,26 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             asm.append(stmt, target);
         }
         "pad" => {
-            let c = Expression::parse(&mut tokens, target);
-            asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+            let val = if let Some(c) = tokens.peek_non_wsp() {
+                let c = Expression::parse(&mut tokens, target);
+                asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+            } else {
+                errors::cmd_no_arg(cmd.span.clone(), "pad", "address", "$008123");
+                return;
+            };
         }
         "base" => {
-            let val = if tokens.peek_non_wsp().unwrap().span.eq("off") {
-                None
+            let val = if let Some(c) = tokens.peek_non_wsp() {
+                if tokens.peek_non_wsp().unwrap().span.eq("off") {
+                    None
+                } else {
+                    let expr = Expression::parse(&mut tokens, target);
+                    let mut base = expr.eval_const(target) as usize;
+                    Some(base)
+                }
             } else {
-                let expr = Expression::parse(&mut tokens, target);
-                let mut base = expr.eval_const(target) as usize;
-                Some(base)
+                errors::cmd_no_arg(cmd.span.clone(), "base", "address", "$7E2000");
+                return;
             };
             let stmt = Statement::base(val, cmd.span.clone());
             asm.append(stmt, target);
@@ -539,39 +533,67 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         "print" => {
             //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
             //target.push_msg(Message::info(cmd.span.clone(), 0, c))
+            if tokens.peek_non_wsp().is_none() {
+                errors::cmd_no_arg(cmd.span.clone(), "print", "message", "\"hello world\"");
+                return;
+            }
+
             let c = Expression::parse(&mut tokens, target);
             let stmt = Statement::print(c, cmd.span.clone());
             asm.append(stmt, target);
         }
         "expr" => {
             let c = Expression::parse(&mut tokens, target);
-            target.push_msg(Message::info(cmd.span.clone(), 0, format!("{:?}", c)))
+            Message::info(cmd.span.clone(), format!("{:?}", c)).push();
         }
         instr if instr.len() == 3 => {
             if let Some(stmt) = crate::instruction::parse(cmd, &mut tokens, target) {
                 asm.append(stmt, target);
             }
         }
-        c => println!("unknown command {}", c)
+        c => {
+            errors::cmd_unknown(cmd.span.clone());
+        }
     }
 }
-fn parse_func_args(tokens: &mut TokenList, target: &mut Target) -> Vec<String> {
-    let paren = tokens.next_non_wsp().unwrap(); // TODO: handle later
-    assert_eq!(&*paren.span, "(");
+fn parse_func_args(tokens: &mut TokenList, target: &mut Target) -> Option<Vec<String>> {
+    let paren = if let Some(c) = tokens.next_non_wsp() { c } else {
+        errors::arglist_expected(tokens.last().unwrap().span.clone());
+        return None;
+    };
+    if !paren.span.eq("(") {
+        errors::arglist_expected(paren.span.clone());
+        return None;
+    }
     let mut args = vec![];
-    if &*tokens.peek_non_wsp().unwrap().span != ")" { loop {
-        let arg = tokens.next_non_wsp().unwrap();
-        if !arg.is_ident() { panic!(); }
-        args.push(arg.span.to_string());
-        match tokens.next_non_wsp() {
-            Some(c) if &*c.span == "," => continue,
-            Some(c) if &*c.span == ")" => break,
-            None => panic!(),
-            Some(c) => {
-                target.push_msg(Message::error(c.span.clone(), 0, format!("Unknown separator")));
-                return vec![];
+    let n = if let Some(c) = tokens.peek_non_wsp() { c } else {
+        errors::arglist_unterminated(tokens.last().unwrap().span.clone());
+        return None;
+    };
+    if !n.span.eq(")") {
+        loop {
+            let arg = if let Some(c) = tokens.next_non_wsp() { c } else {
+                errors::arglist_unterminated(tokens.last().unwrap().span.clone());
+                return None;
+            };
+            if !arg.is_ident() {
+                errors::arglist_non_ident(arg.span.clone());
+                return None;
+            }
+            args.push(arg.span.to_string());
+            match tokens.next_non_wsp() {
+                Some(c) if &*c.span == "," => continue,
+                Some(c) if &*c.span == ")" => break,
+                None => {
+                    errors::arglist_unterminated(tokens.last().unwrap().span.clone());
+                    return None;
+                },
+                Some(c) => {
+                    errors::arglist_non_ident(c.span.clone());
+                    return None;
+                }
             }
         }
-    } } else { tokens.next_non_wsp(); }
-    args
+    } else { tokens.next_non_wsp(); }
+    Some(args)
 }

@@ -10,6 +10,7 @@ mod instruction;
 use executor::Target;
 use assembler::Assembler;
 use context::ContextStr;
+use message::MsgQueue;
 
 fn main() {
     let arg = std::env::args().nth(1).expect("args pls");
@@ -18,15 +19,14 @@ fn main() {
     let mut asm = Assembler::new();
     //asm.set_compare(compare);
     executor::exec_file(arg.into(), ContextStr::cli(), &mut target, &mut asm);
-    for i in target.iter_messages() {
+    MsgQueue::drain(|i| {
         println!("{}", i);
-    }
-    if target.has_error() {
+    });
+    if MsgQueue::has_error() {
         println!("Parsing failed");
         return;
     }
     target.profiler("executed");
-    target.clear_messages();
 
     /*for (k,v) in target.labels().clone().iter().enumerate() {
         if let Some(expr) = asm.get_label_value(k).cloned() {
@@ -37,10 +37,10 @@ fn main() {
 
     let mut out = std::io::BufWriter::new(std::fs::File::create("out.sfc").unwrap());
     asm.write_to_file(&mut target, &mut out);
-    for i in target.iter_messages() {
+    MsgQueue::drain(|i| {
         println!("{}", i);
-    }
-    if target.has_error() {
+    });
+    if MsgQueue::has_error() {
         println!("Assembly failed");
         return;
     }

@@ -1,6 +1,6 @@
 use crate::context::{LineInfo, ContextStr};
 use crate::executor::Target;
-use crate::message::Message;
+use crate::message::errors;
 
 #[derive(Debug, Clone)]
 pub struct Token {
@@ -79,6 +79,7 @@ impl Token {
             kind: TokenKind::Number { value, length: 0, radix: 10 }
         }
     }
+    pub fn eq(&self, other: &str) -> bool { self.span.eq(other) }
 }
 
 #[derive(Debug, Clone)]
@@ -154,7 +155,7 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             }
             let span = input.prefix_from(needle);
             if overflowed {
-                target.push_error(span.clone(), 3, format!("Number overflows a 64-bit value"));
+                errors::numeric_overflow(span.clone());
                 return vec![]
             }
             if num.len() == 0 {
@@ -176,7 +177,7 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
                         _ => {}
                     }
                 } else {
-                    target.push_error(input.clone(), 5, format!("Unclosed string literal"));
+                    errors::str_literal_unclosed(input.clone());
                     return vec![]
                 }
             }
@@ -197,21 +198,28 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
                 // do nothing
             } else {
                 let span = input.advance(1);
-                target.push_warning(span.clone(), 10, format!("Stray backslash"));
+                //Message::warning(span.clone(), format!("Stray backslash"));
                 out.push(Token { span, kind: TokenKind::Symbol });
             }
         } else if c == '+' || c == '-' || c == '.' {
-            let span = input.advance_some(input.find(|n: char| n != c));
-            out.push(Token { span, kind: TokenKind::Symbol });
+            let needle = input.needle();
+            if input.skip_if("+=") {
+                let span = input.prefix_from(needle);
+                out.push(Token { span, kind: TokenKind::Symbol });
+            } else {
+                let span = input.advance_some(input.find(|n: char| n != c));
+                out.push(Token { span, kind: TokenKind::Symbol });
+            }
         } else {
             let tokens = [
                 "#=", "**", "<:",
                 ":=", "?=", ";@",
+                "+=",
                 // Java tokens, reserved for ease of use
                 "<<=", ">>=",
                 "::", "->", "==", ">=", "<=",
                 "!=", "&&", "||", // "++", "--",
-                "<<", ">>", "+=", "-=", "*=",
+                "<<", ">>", "-=", "*=",
                 "/=", "&=", "|=", "^=", "%=",
                 ""
             ];
@@ -244,7 +252,7 @@ fn parse_define(input: &mut ContextStr, target: &mut Target) -> Option<(ContextS
         }) {
             c
         } else {
-            target.push_error(input.clone(), 6, format!("Unclosed escaped define"));
+            errors::define_unclosed(input.clone());
             return None;
         };
         input.advance(end+1);
@@ -285,7 +293,7 @@ pub fn expand_str(mut input: ContextStr, target: &mut Target) -> Option<String> 
                 out.push_str(&value);
                 continue;
             } else {
-                target.push_msg(Message::error(name.clone(), 8, format!("Define {:?} not found in this scope", name_s)));
+                errors::define_unknown(name.clone());
                 return None;
             }
         }
@@ -328,6 +336,9 @@ impl<'a> TokenList<'a> {
         let res = self.inner.get(self.pos);
         self.pos += 1;
         res
+    }
+    pub fn prev(&self) -> Option<&'a Token> {
+        self.inner.get(self.pos.saturating_sub(1))
     }
     pub fn next(&mut self) -> Option<&'a Token> {
         let res = self.inner.get(self.pos);

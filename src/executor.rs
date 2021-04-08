@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use indexmap::IndexSet;
 
 use crate::context::{LineInfo, LocalContext, ContextStr};
-use crate::message::Message;
+use crate::message::{errors, Message};
 
 use crate::splitter::{self, Block};
 use crate::lexer::{self, Token, TokenKind, TokenList};
@@ -18,7 +18,6 @@ mod parser;
 
 pub struct Target {
     files: HashMap<Rc<str>, ParsedFile>,
-    messages: Vec<Message>,
     defines: HashMap<String, Vec<Token>>,
     macros: HashMap<String, Macro>,
     cur_macro: Option<(String, Macro)>,
@@ -27,14 +26,12 @@ pub struct Target {
     functions: HashMap<String, (usize, Expression)>,
     label_idx: IndexSet<Label>,
     label_ctx: LabelCtx,
-    has_error: bool,
     profiler: std::time::Instant,
 }
 impl Target {
     pub fn new() -> Self {
         Self {
             files: HashMap::new(),
-            messages: vec![],
             defines: HashMap::new(),
             functions: HashMap::new(),
             macros: HashMap::new(),
@@ -43,7 +40,6 @@ impl Target {
             cur_macro: None,
             label_idx: IndexSet::new(),
             label_ctx: LabelCtx::default(),
-            has_error: false,
             profiler: std::time::Instant::now()
         }
     }
@@ -51,27 +47,15 @@ impl Target {
         eprintln!("[{:>6}µs] {}", self.profiler.elapsed().as_micros(), msg);
     }
     pub fn push_msg(&mut self, msg: Message) {
-        self.has_error |= msg.is_error();
-        self.messages.push(msg);
+        msg.push();
     }
     pub fn push_error(&mut self, source: ContextStr, code: usize, data: String) {
-        self.has_error = true;
-        self.messages.push(Message::error(source, code, data));
+        Message::error(source, code, data).push();
     }
-    pub fn push_warning(&mut self, source: ContextStr, code: usize, data: String) {
-        self.messages.push(Message::warning(source, code, data));
-    }
-    pub fn push_info(&mut self, source: ContextStr, code: usize, data: String) {
-        self.messages.push(Message::info(source, code, data));
-    }
-    pub fn iter_messages(&self) -> impl Iterator<Item=&Message> + '_ {
-        self.messages.iter()
-    }
-    pub fn clear_messages(&mut self) {
-        self.messages.clear()
+    pub fn push_warning(&mut self, source: ContextStr, data: String) {
+        Message::warning(source, data).push();
     }
     pub fn macro_invoke(&self) -> Option<usize> { self.macro_label_ctx.last().map(|c| c.0) }
-    pub fn has_error(&self) -> bool { self.has_error }
     pub fn defines(&self) -> &HashMap<String, Vec<Token>> { &self.defines }
     pub fn label_id(&mut self, label: Label) -> usize {
         self.label_idx.insert_full(label).0
@@ -110,7 +94,7 @@ impl Target {
                 if *d != c { panic!("uhhh internal error with macros ({} != {})", d, c); }
                 e
             } else {
-                panic!("not in a macro");
+                panic!("internal error: not in a macro");
             }
         } else {
             &mut self.label_ctx
@@ -143,7 +127,8 @@ impl Target {
     }
     pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
         if depth > self.label_ctx.named.len() {
-            self.push_error(label, 24, "Label has no parent".into());
+            //self.push_error(label, 24, "Label has no parent".into());
+            errors::label_no_parent(label);
             vec![]
         } else {
             let mut c = self.label_ctx.named[..depth].to_vec();
@@ -262,7 +247,7 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
         let file = match std::fs::read(&*filename) {
             Ok(c) => c,
             Err(e) => {
-                target.push_error(source, 1, format!("Could not read file {}: {}", filename, e));
+                errors::file_read(source, &filename, &e);
                 return;
             }
         };
@@ -270,7 +255,7 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
         let mut file_str = match String::from_utf8(file) {
             Ok(c) => c,
             Err(e) => {
-                target.push_error(source, 2, format!("File {} is not utf-8: {}", filename, e));
+                errors::file_non_utf8(source, &filename, &e);
                 return;
             }
         };
@@ -317,14 +302,12 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
     let mut expand_history: Vec<Token> = vec![];    // Recursion detection
     while let Some(c) = tokens.iter().position(|c| c.is_define()) {
         if recursion > 128 {
-            let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
-            target.push_msg(Message::error(line.clone(), 11, format!("Define expansion limit reached"))
-                //.with_help(format!("expansion state: {}", token_str))
-                .with_help(format!("while expanding statement: {} at {}", line, line.source().short()))
-            );
+            //let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
+            errors::define_rec_limit(line.clone());
             break;
         }
-        let def = tokens[c].as_define().unwrap();
+        let token = tokens[c].clone();
+        let def = token.as_define().unwrap();
 
 
         let temp;
@@ -350,14 +333,11 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
             expanded = true;
             recursion += 1;
             let mut value = value.clone();
-            value.iter_mut().for_each(|c| c.span.set_parent(def.clone()));
+            value.iter_mut().for_each(|c| c.span.set_parent(token.span.clone()));
             tokens.splice(c..c+1, value);
         } else {
-            let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
-            target.push_msg(Message::error(def.clone(), 8, format!("Define {:?} not found in this scope", def_s))
-                .with_help(format!("expansion state: {}", token_str))
-                .with_help(format!("while expanding statement: {} at {}", line, line.source().short()))
-            );
+            //let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
+            errors::define_unknown(token.span.clone());
             break;
         }
     }

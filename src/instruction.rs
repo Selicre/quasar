@@ -304,8 +304,9 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
             target.push_error(c.span.clone(), 0, "Unexpected token".into());
             return None;
         }
-        target.push_msg(Message::warning(bracket.unwrap().span.clone(), 0, "Ambiguous addressing mode; using direct addressing".into())
-            .with_help("Use the unary plus before the expression to disambiguate: `lda +($00)`".into()));
+        Message::warning(bracket.unwrap().span.clone(), "Ambiguous addressing mode; using direct addressing".into())
+            .with_help("Use the unary plus before the expression to disambiguate: `lda +($00)`".into())
+            .push();
         *tokens = tokens_backup;
         expr = Expression::parse(tokens, target);
         if expr.is_empty() { return None; }

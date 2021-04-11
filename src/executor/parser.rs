@@ -14,17 +14,17 @@ pub(super) fn exec_stmt(
 
     if &*tokens[0].span == "macro" && ctx.enabled() {
         if target.cur_macro.is_some() {
-            errors::macro_nested_def(tokens[0].span.clone());
+            errors::macro_nested_def(tokens[0].span.clone()).push();
             return;
         }
         let mut tokens = TokenList::new(&tokens);
         let macro_token = tokens.next_non_wsp().unwrap();
         let name = if let Some(n) = tokens.next_non_wsp() { n } else {
-            errors::macro_def_no_name(macro_token.span.clone());
+            errors::macro_def_no_name(macro_token.span.clone()).push();
             return;
         };
         if !name.is_ident() {
-            errors::macro_def_no_name(name.span.clone());
+            errors::macro_def_no_name(name.span.clone()).push();
             return;
         }
         let args = if let Some(c) = parse_func_args(&mut tokens, target) { c } else { return; };
@@ -79,7 +79,7 @@ pub(super) fn exec_stmt(
             if tokens.len() > 5 {
                 let mut value = i.clone();
                 value.advance(tokens[5].span.start() - i.start());
-                errors::define_trailing_chars(value);
+                errors::define_trailing_chars(value).push();
                 return;
             }
             v = lexer::tokenize_stmt(ctx, target, false);
@@ -248,12 +248,12 @@ fn exec_disabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx:
         "while" => ctx.enter_skip(),
         "elseif" if !ctx.skipping() => {
             if ctx.if_stack.len() == 0 {
-                errors::stray_elseif(cmd.span.clone());
+                errors::stray_elseif(cmd.span.clone()).push();
                 return;
             }
             // Are we in a while loop?
             if ctx.if_stack.last().unwrap().is_while() {
-                errors::else_after_while(cmd.span.clone(), "elseif");
+                errors::else_after_while(cmd.span.clone(), "elseif").push();
                 return;
             }
             if let Some(_) = tokens.peek_non_wsp() {
@@ -261,25 +261,25 @@ fn exec_disabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx:
                 let val = expr.eval_const(target);
                 ctx.enter_elseif(val != 0.0);
             } else {
-                errors::if_no_condition(cmd.span.clone(), "elseif");
+                errors::if_no_condition(cmd.span.clone(), "elseif").push();
                 return;
             }
         }
         "else" if !ctx.skipping() => {
             if ctx.if_stack.len() == 0 {
-                errors::stray_else(cmd.span.clone());
+                errors::stray_else(cmd.span.clone()).push();
                 return;
             }
             // Are we in a while loop?
             if ctx.if_stack.last().unwrap().is_while() {
-                errors::else_after_while(cmd.span.clone(), "else");
+                errors::else_after_while(cmd.span.clone(), "else").push();
                 return;
             }
             ctx.enter_elseif(true);
         }
         "endif" => {
             if ctx.if_stack.len() == 0 {
-                errors::stray_endif(cmd.span.clone());
+                errors::stray_endif(cmd.span.clone()).push();
                 return;
             }
             ctx.run_endif();
@@ -306,7 +306,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 ctx.enter_if(val != 0.0);
                 ctx.if_inline = !newline;
             } else {
-                errors::if_no_condition(cmd.span.clone(), "if");
+                errors::if_no_condition(cmd.span.clone(), "if").push();
                 return;
             }
         }
@@ -317,18 +317,18 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 ctx.enter_while(val != 0.0);
                 ctx.if_inline = !newline;
             } else {
-                errors::if_no_condition(cmd.span.clone(), "while");
+                errors::if_no_condition(cmd.span.clone(), "while").push();
                 return;
             }
         }
         "elseif" => {
             if ctx.if_stack.len() == 0 {
-                errors::stray_elseif(cmd.span.clone());
+                errors::stray_elseif(cmd.span.clone()).push();
                 return;
             }
             // Are we in a while loop?
             if ctx.if_stack.last().unwrap().is_while() {
-                errors::else_after_while(cmd.span.clone(), "elseif");
+                errors::else_after_while(cmd.span.clone(), "elseif").push();
                 return;
             }
             if let Some(_) = tokens.peek_non_wsp() {
@@ -336,25 +336,25 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 let val = expr.eval_const(target);
                 ctx.enter_elseif(val != 0.0);
             } else {
-                errors::if_no_condition(cmd.span.clone(), "elseif");
+                errors::if_no_condition(cmd.span.clone(), "elseif").push();
                 return;
             }
         }
         "else" => {
             if ctx.if_stack.len() == 0 {
-                errors::stray_else(cmd.span.clone());
+                errors::stray_else(cmd.span.clone()).push();
                 return;
             }
             // Are we in a while loop?
             if ctx.if_stack.last().unwrap().is_while() {
-                errors::else_after_while(cmd.span.clone(), "else");
+                errors::else_after_while(cmd.span.clone(), "else").push();
                 return;
             }
             ctx.enter_elseif(true);
         }
         "endif" => {
             if ctx.if_stack.len() == 0 {
-                errors::stray_endif(cmd.span.clone());
+                errors::stray_endif(cmd.span.clone()).push();
                 return;
             }
             ctx.run_endif();
@@ -362,17 +362,17 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         "%" => {
             let name = match tokens.next_non_wsp() {
                 Some(n) if n.is_ident() => n,
-                _ => { errors::macro_no_name(cmd.span.clone()); return; }
+                _ => { errors::macro_no_name(cmd.span.clone()).push(); return; }
             };
             if !tokens.next_non_wsp().unwrap().span.eq("(") {
-                errors::macro_malformed(cmd.span.clone()); return;
+                errors::macro_malformed(cmd.span.clone()).push(); return;
             }
             let mut macro_args = vec![vec![]];
             loop {
                 let t = if let Some(t) = tokens.next_non_wsp() {
                     t
                 } else {
-                    errors::macro_malformed(cmd.span.clone()); return;
+                    errors::macro_malformed(cmd.span.clone()).push(); return;
                 };
                 if t.is_string() {
                     if macro_args.last_mut().unwrap().len() == 0 {
@@ -394,11 +394,11 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         }
         "function" => {
             let name = if let Some(n) = tokens.next_non_wsp() { n } else {
-                errors::function_no_name(cmd.span.clone());
+                errors::function_no_name(cmd.span.clone()).push();
                 return;
             };
             if !name.is_ident() {
-                errors::function_no_name(name.span.clone());
+                errors::function_no_name(name.span.clone()).push();
                 return;
             }
             let args = if let Some(c) = parse_func_args(&mut tokens, target) { c } else {
@@ -406,19 +406,19 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             };
             let eq = tokens.next_non_wsp();
             if eq.map_or(true, |c| !c.span.eq("=")) {
-                errors::function_no_eq(tokens.prev().unwrap().span.clone());
+                errors::function_no_eq(tokens.prev().unwrap().span.clone()).push();
                 return;
             }
             let expr = Expression::parse_fn_body(&args, &mut tokens, target);
             if expr.is_empty() {
-                errors::function_empty(cmd.span.clone());
+                errors::function_empty(cmd.span.clone()).push();
                 return;
             }
             target.add_function(name.span.to_string(), args.len(), expr);
         }
-        "rep" if !tokens.peek_non_wsp().map_or(true, |c| c.span.eq("#")) => {
+        "rep" if tokens.peek_non_wsp().map_or(false, |c| !c.span.eq("#") && !c.span.eq(".")) => {
             if tokens.peek_non_wsp().is_none() {
-                errors::cmd_no_arg(cmd.span.clone(), "rep", "repeat count", "5");
+                errors::cmd_no_arg(cmd.span.clone(), "rep", "repeat count", "5").push();
                 return;
             }
             let expr = Expression::parse(&mut tokens, target);
@@ -429,7 +429,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         }
         "skip" => {
             if tokens.peek_non_wsp().is_none() {
-                errors::cmd_no_arg(cmd.span.clone(), "skip", "skip count", "5");
+                errors::cmd_no_arg(cmd.span.clone(), "skip", "skip count", "5").push();
                 return;
             }
             let expr = Expression::parse(&mut tokens, target);
@@ -450,7 +450,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                     temp.trim()
                 }
             } else {
-                errors::cmd_no_arg(cmd.span.clone(), "incsrc", "filename", "\"other.asm\"");
+                errors::cmd_no_arg(cmd.span.clone(), "incsrc", "filename", "\"other.asm\"").push();
                 return;
             };
             exec_file(c.into(), cmd.span.clone(), target, asm);
@@ -474,18 +474,26 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                     Some(c) if &*c.span == "," => continue,
                     None => break,
                     Some(c) => {
-                        errors::cmd_unknown_sep(c.span.clone());
+                        errors::cmd_unknown_sep(c.span.clone()).push();
                         break;
                     }
                 }
             }
+        }
+        "header" => {},     // TODO
+        "lorom" => {},
+        "autoclean" => {
+            exec_enabled(tokens, newline, target, ctx, asm);
+        }
+        "freespace" | "freecode" | "freedata" => {
+            asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Freecode, target);
         }
         "org" => {
             if let Some(c) = tokens.peek_non_wsp() {
                 let c = Expression::parse(&mut tokens, target);
                 asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
             } else {
-                errors::cmd_no_arg(cmd.span.clone(), "org", "address", "$008000");
+                errors::cmd_no_arg(cmd.span.clone(), "org", "address", "$008000").push();
                 return;
             }
         }
@@ -510,7 +518,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 let c = Expression::parse(&mut tokens, target);
                 asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
             } else {
-                errors::cmd_no_arg(cmd.span.clone(), "pad", "address", "$008123");
+                errors::cmd_no_arg(cmd.span.clone(), "pad", "address", "$008123").push();
                 return;
             };
         }
@@ -524,7 +532,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                     Some(base)
                 }
             } else {
-                errors::cmd_no_arg(cmd.span.clone(), "base", "address", "$7E2000");
+                errors::cmd_no_arg(cmd.span.clone(), "base", "address", "$7E2000").push();
                 return;
             };
             let stmt = Statement::base(val, cmd.span.clone());
@@ -534,7 +542,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
             //target.push_msg(Message::info(cmd.span.clone(), 0, c))
             if tokens.peek_non_wsp().is_none() {
-                errors::cmd_no_arg(cmd.span.clone(), "print", "message", "\"hello world\"");
+                errors::cmd_no_arg(cmd.span.clone(), "print", "message", "\"hello world\"").push();
                 return;
             }
 
@@ -546,38 +554,50 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             let c = Expression::parse(&mut tokens, target);
             Message::info(cmd.span.clone(), format!("{:?}", c)).push();
         }
+        "warn" => {
+            let expr = Expression::parse(&mut tokens, target);
+            let mut base = expr.eval_const_str(target);
+            Message::warning(cmd.span.clone(), base).push();
+        }
+        "error" => {
+            let expr = Expression::parse(&mut tokens, target);
+            let mut base = expr.eval_const_str(target);
+            Message::error(cmd.span.clone(), 0, base).push();
+        }
         instr if instr.len() == 3 => {
             if let Some(stmt) = crate::instruction::parse(cmd, &mut tokens, target) {
                 asm.append(stmt, target);
+            } else {
+                target.push_error(cmd.span.clone(), 0, "Unsupported addressing mode for instruction".into());
             }
         }
         c => {
-            errors::cmd_unknown(cmd.span.clone());
+            errors::cmd_unknown(cmd.span.clone()).push();
         }
     }
 }
 fn parse_func_args(tokens: &mut TokenList, target: &mut Target) -> Option<Vec<String>> {
     let paren = if let Some(c) = tokens.next_non_wsp() { c } else {
-        errors::arglist_expected(tokens.last().unwrap().span.clone());
+        errors::arglist_expected(tokens.last().unwrap().span.clone()).push();
         return None;
     };
     if !paren.span.eq("(") {
-        errors::arglist_expected(paren.span.clone());
+        errors::arglist_expected(paren.span.clone()).push();
         return None;
     }
     let mut args = vec![];
     let n = if let Some(c) = tokens.peek_non_wsp() { c } else {
-        errors::arglist_unterminated(tokens.last().unwrap().span.clone());
+        errors::arglist_unterminated(tokens.last().unwrap().span.clone()).push();
         return None;
     };
     if !n.span.eq(")") {
         loop {
             let arg = if let Some(c) = tokens.next_non_wsp() { c } else {
-                errors::arglist_unterminated(tokens.last().unwrap().span.clone());
+                errors::arglist_unterminated(tokens.last().unwrap().span.clone()).push();
                 return None;
             };
             if !arg.is_ident() {
-                errors::arglist_non_ident(arg.span.clone());
+                errors::arglist_non_ident(arg.span.clone()).push();
                 return None;
             }
             args.push(arg.span.to_string());
@@ -585,11 +605,11 @@ fn parse_func_args(tokens: &mut TokenList, target: &mut Target) -> Option<Vec<St
                 Some(c) if &*c.span == "," => continue,
                 Some(c) if &*c.span == ")" => break,
                 None => {
-                    errors::arglist_unterminated(tokens.last().unwrap().span.clone());
+                    errors::arglist_unterminated(tokens.last().unwrap().span.clone()).push();
                     return None;
                 },
                 Some(c) => {
-                    errors::arglist_non_ident(c.span.clone());
+                    errors::arglist_non_ident(c.span.clone()).push();
                     return None;
                 }
             }

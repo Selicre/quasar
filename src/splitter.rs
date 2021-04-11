@@ -87,7 +87,7 @@ pub fn parse_line(mut line: ContextStr, target: &mut Target, stmts: &mut Vec<Blo
                     }
                 } else {
                     let mut stmt = line.prefix_from(str_needle);
-                    errors::str_literal_unclosed(stmt);
+                    errors::str_literal_unclosed(stmt).push();
                     return;
                 }
             }

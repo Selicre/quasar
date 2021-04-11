@@ -36,7 +36,6 @@ impl Severity {
         }
     }
 }
-
 #[derive(Default)]
 pub struct MsgQueue {
     queue: Vec<Message>,
@@ -62,6 +61,7 @@ thread_local! {
     static MESSAGES: RefCell<MsgQueue> = RefCell::new(MsgQueue::default());
 }
 
+#[must_use = "you probably want to .push() this error"]
 #[derive(Debug)]
 pub struct Message {
     source: ContextStr,
@@ -137,14 +137,13 @@ pub mod errors {
     macro_rules! err_list {
         ($($fnname:ident ($($args:tt)*) { $($msg:tt)* } $({ $($help:tt)* })*)*) => {
             $(
-            pub fn $fnname(span: ContextStr, $($args)*) {
+            pub fn $fnname(span: ContextStr, $($args)*) -> Message {
                 Message::error(
                     span,
                     0,
                     format!($($msg)*)
                 )
                 $(.with_help(format!($($help)*)))*
-                .push()
             }
             )*
         }
@@ -195,5 +194,13 @@ pub mod errors {
         cmd_no_arg(cmd: &str, arg: &str, example: &str) { "`{}` command with no {}", cmd, arg } { "add an argument, like `{} {}`", cmd, example }
         cmd_unknown_sep() { "Unknown separator" }
         cmd_unknown() { "Unknown command" }
+
+        // rom
+        rom_unmapped() { "Address does not map to ROM" }
+        rom_bank_crossed() { "This statement crosses a bank boundary" }
+
+        // expr
+        expr_fn_arg_count(need: impl Display, have: usize) { "This function expects {} arguments, found {}", need, have }
+        expr_read_file_oob() { "File read out of bounds" }
     }
 }

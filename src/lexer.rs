@@ -155,7 +155,7 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             }
             let span = input.prefix_from(needle);
             if overflowed {
-                errors::numeric_overflow(span.clone());
+                errors::numeric_overflow(span.clone()).push();
                 return vec![]
             }
             if num.len() == 0 {
@@ -177,7 +177,7 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
                         _ => {}
                     }
                 } else {
-                    errors::str_literal_unclosed(input.clone());
+                    errors::str_literal_unclosed(input.clone()).push();
                     return vec![]
                 }
             }
@@ -252,7 +252,7 @@ fn parse_define(input: &mut ContextStr, target: &mut Target) -> Option<(ContextS
         }) {
             c
         } else {
-            errors::define_unclosed(input.clone());
+            errors::define_unclosed(input.clone()).push();
             return None;
         };
         input.advance(end+1);
@@ -293,7 +293,7 @@ pub fn expand_str(mut input: ContextStr, target: &mut Target) -> Option<String> 
                 out.push_str(&value);
                 continue;
             } else {
-                errors::define_unknown(name.clone());
+                errors::define_unknown(name.clone()).push();
                 return None;
             }
         }

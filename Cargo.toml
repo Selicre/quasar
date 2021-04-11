@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 indexmap = "1.6"
 phf = "0.8"
+bytes = "1.0"
 
 [build-dependencies]
 phf_codegen = "0.8"

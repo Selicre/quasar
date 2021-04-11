@@ -11,6 +11,7 @@ use crate::splitter::{self, Block};
 use crate::lexer::{self, Token, TokenKind, TokenList};
 use crate::expression::{self, Label, Expression};
 use crate::assembler::{Statement, Assembler};
+use crate::rom::Rom;
 
 use parser::exec_stmt;
 
@@ -18,6 +19,8 @@ mod parser;
 
 pub struct Target {
     files: HashMap<Rc<str>, ParsedFile>,
+    file_cache: HashMap<String, Vec<u8>>,
+    rom_cache: Rom,
     defines: HashMap<String, Vec<Token>>,
     macros: HashMap<String, Macro>,
     cur_macro: Option<(String, Macro)>,
@@ -29,9 +32,11 @@ pub struct Target {
     profiler: std::time::Instant,
 }
 impl Target {
-    pub fn new() -> Self {
+    pub fn new(rom_cache: Rom) -> Self {
         Self {
             files: HashMap::new(),
+            file_cache: HashMap::new(),
+            rom_cache,
             defines: HashMap::new(),
             functions: HashMap::new(),
             macros: HashMap::new(),
@@ -42,6 +47,29 @@ impl Target {
             label_ctx: LabelCtx::default(),
             profiler: std::time::Instant::now()
         }
+    }
+    // TODO: read relative to cwd
+    pub fn read_file<'a>(&'a mut self, source: &ContextStr, filename: &str) -> Result<&'a [u8], Message> {
+        if self.file_cache.contains_key(filename) {
+            Ok(self.file_cache.get(filename).map(|c| &**c).unwrap())
+        } else {
+            let c = std::fs::read(filename).map_err(|e| {
+                errors::file_read(source.clone(), &filename, &e)
+            })?;
+            Ok(self.file_cache.entry(filename.to_string()).or_insert(c))
+        }
+    }
+    pub fn read_file_n(&mut self, source: &ContextStr, filename: &str, offset: usize, len: usize) -> Result<f64, Message> {
+        self.read_file(source, filename)?.get(offset..offset+len)
+        .ok_or(errors::expr_read_file_oob(source.clone()))
+        .map(|source| {
+            let mut v = [0; 4];
+            v[..len].copy_from_slice(source);
+            u32::from_le_bytes(v) as f64
+        })
+    }
+    pub fn read_rom(&mut self, source: &ContextStr, addr: u32, len: usize) -> Result<f64, Message> {
+        self.rom_cache.read_at(addr, len, source)
     }
     pub fn profiler(&self, msg: &str) {
         eprintln!("[{:>6}µs] {}", self.profiler.elapsed().as_micros(), msg);
@@ -128,7 +156,7 @@ impl Target {
     pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
         if depth > self.label_ctx.named.len() {
             //self.push_error(label, 24, "Label has no parent".into());
-            errors::label_no_parent(label);
+            errors::label_no_parent(label).push();
             vec![]
         } else {
             let mut c = self.label_ctx.named[..depth].to_vec();
@@ -247,7 +275,7 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
         let file = match std::fs::read(&*filename) {
             Ok(c) => c,
             Err(e) => {
-                errors::file_read(source, &filename, &e);
+                errors::file_read(source, &filename, &e).push();
                 return;
             }
         };
@@ -255,7 +283,7 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
         let mut file_str = match String::from_utf8(file) {
             Ok(c) => c,
             Err(e) => {
-                errors::file_non_utf8(source, &filename, &e);
+                errors::file_non_utf8(source, &filename, &e).push();
                 return;
             }
         };
@@ -303,7 +331,7 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
     while let Some(c) = tokens.iter().position(|c| c.is_define()) {
         if recursion > 128 {
             //let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
-            errors::define_rec_limit(line.clone());
+            errors::define_rec_limit(line.clone()).push();
             break;
         }
         let token = tokens[c].clone();
@@ -337,7 +365,7 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
             tokens.splice(c..c+1, value);
         } else {
             //let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
-            errors::define_unknown(token.span.clone());
+            errors::define_unknown(token.span.clone()).push();
             break;
         }
     }

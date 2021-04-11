@@ -11,12 +11,22 @@ impl Expression {
         label_depth: &mut Vec<usize>
     ) -> Option<()> {
         //println!("evaluating: {:?}", self);
+        let get_string = |stack: &mut Vec<(ContextStr, StackValue)>, target: &mut Target| {
+            let (span, arg) = stack.pop().expect("unbalanced expr");
+            match arg {
+                StackValue::String(c) => c,
+                StackValue::Number { .. } => {
+                    target.push_error(span.clone(), 35, "This argument is expected to be a string".into());
+                    String::new()
+                },
+            }
+        };
         let get_val = |stack: &mut Vec<(ContextStr, StackValue)>, target: &mut Target| {
             let (span, arg) = stack.pop().expect("unbalanced expr");
             match arg {
                 StackValue::Number { value, .. } => value,
                 StackValue::String(_) => {
-                    target.push_error(span.clone(), 35, "Strings are not allowed in math operations".into());
+                    target.push_error(span.clone(), 35, "This argument is expected to be a number".into());
                     0.0
                 },
             }
@@ -116,10 +126,15 @@ impl Expression {
                         "or" => func! { |a,b| Binop::Or.exec(&span, a, b, target) },
                         "nor" => func! { |a,b| Unop::Not.exec(&span, Binop::Or.exec(&span, a, b, target), target) },
                         "and" => func! { |a,b| Binop::And.exec(&span, a, b, target) },
+                        "nand" => func! { |a,b| Unop::Not.exec(&span, Binop::And.exec(&span, a, b, target), target) },
                         "equal" => func! { |a,b| Binop::Eq.exec(&span, a, b, target) },
+                        "clamp" => func! { |a,b,c| a.clamp(b,c) },
+                        "safediv" => func! { |a,b,c| if b == 0.0 { c } else { a / b } },
                         "notequal" => func! { |a,b| Binop::Ne.exec(&span, a, b, target) },
                         "min" => func! { |a,b| a.min(b) },
                         "max" => func! { |a,b| a.max(b) },
+                        "floor" => func! { |a| a.floor() },
+                        "ceil" => func! { |a| a.ceil() },
                         "select" => func! { |cond,a,b| if cond != 0.0 { a } else { b } },
                         "datasize" => {
                             let label_name = stack.pop().expect("unbalanced expr");
@@ -129,6 +144,58 @@ impl Expression {
                                 target.push_error(span.clone(), 0, "This function expects a symbol, not an expression".into());
                                 return None;
                             }
+                        },
+                        "read1" | "read2" | "read3" | "read4" => {
+                            // this sucks. please sort it out later
+                            let c = name.chars().last().unwrap().to_digit(10).unwrap() as usize;
+                            let default = match len {
+                                1 => None,
+                                2 => Some(get_val(stack, target)),
+                                _ => {
+                                    errors::expr_fn_arg_count(span.clone(), "1 or 2", *len).push();
+                                    return None;
+                                }
+                            };
+                            let offset = get_val(stack, target) as u32;
+                            let mut value = target.read_rom(&span, offset, c);
+                            if value.is_err() {
+                                if let Some(c) = default {
+                                    value = Ok(c);
+                                }
+                            }
+                            let value = value.map_err(|c| c.push()).ok()?;
+                            StackValue::Number { value, origin: None }
+                        },
+                        "readfile1" | "readfile2" | "readfile3" | "readfile4" => {
+                            // this sucks. please sort it out later
+                            let c = name.chars().last().unwrap().to_digit(10).unwrap() as usize;
+                            let default = match len {
+                                2 => None,
+                                3 => Some(get_val(stack, target)),
+                                _ => {
+                                    errors::expr_fn_arg_count(span.clone(), "2 or 3", *len).push();
+                                    return None;
+                                }
+                            };
+                            let (offset, file) = (get_val(stack, target), get_string(stack, target));
+                            let offset = offset as usize;
+                            let mut value = target.read_file_n(&span, &file, offset, c);
+                            if value.is_err() {
+                                if let Some(c) = default {
+                                    value = Ok(c);
+                                }
+                            }
+                            let value = value.map_err(|c| c.push()).ok()?;
+                            StackValue::Number { value, origin: None }
+                        },
+                        "defined" => {
+                            if *len != 1 {
+                                errors::expr_fn_arg_count(span.clone(), 1, *len).push();
+                                return None;
+                            }
+                            let v = get_string(stack, target);
+                            let value = if target.defines().contains_key(&v) { 1.0 } else { 0.0 };
+                            StackValue::Number { value, origin: None }
                         },
                         "hex" => {
                             let [arg1] = arity!(1);
@@ -145,6 +212,26 @@ impl Expression {
                         "double" => {
                             let [arg1] = arity!(1);
                             StackValue::String(format!("{}", arg1))
+                        },
+                        "stringsequal" => {
+                            if *len != 2 {
+                                errors::expr_fn_arg_count(span.clone(), 2, *len).push();
+                                return None;
+                            }
+                            let v1 = get_string(stack, target);
+                            let v2 = get_string(stack, target);
+                            let value = if v1 == v2 { 1.0 } else { 0.0 };
+                            StackValue::Number { value, origin: None }
+                        },
+                        "stringsequalnocase" => {
+                            if *len != 2 {
+                                errors::expr_fn_arg_count(span.clone(), 2, *len).push();
+                                return None;
+                            }
+                            let v1 = get_string(stack, target);
+                            let v2 = get_string(stack, target);
+                            let value = if v1.eq_ignore_ascii_case(&v2) { 1.0 } else { 0.0 };
+                            StackValue::Number { value, origin: None }
                         },
                         _ => {
                             target.push_error(span.clone(), 0, format!("Unknown function"));
@@ -190,6 +277,17 @@ impl Expression {
                 0.0
             },
             None => 0.0
+        }
+    }
+    pub fn eval_const_str(&self, target: &mut Target) -> String {
+        let val = self.try_eval(true, target, &Assembler::new());
+        match val {
+            Some((_, StackValue::String(c))) => c,
+            Some((c,_)) => {
+                target.push_error(c, 0, "Expected an expression that returns a string".into());
+                String::new()
+            },
+            None => String::new()
         }
     }
 }

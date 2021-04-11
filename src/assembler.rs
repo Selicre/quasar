@@ -2,6 +2,7 @@ use crate::executor::Target;
 use crate::expression::Expression;
 use crate::message::Message;
 use crate::context::ContextStr;
+use crate::rom::Rom;
 
 use std::collections::HashMap;
 use std::io::{SeekFrom, Seek, Write};
@@ -13,12 +14,12 @@ pub enum StartKind {
 }
 
 pub struct Segment {
-    start: StartKind,
-    label_id: usize,
-    offset: usize,
-    base_offset: Option<usize>,
-    span: ContextStr,
-    stmts: Vec<Statement>
+    pub start: StartKind,
+    pub label_id: usize,
+    pub offset: usize,
+    pub base_offset: Option<usize>,
+    pub span: ContextStr,
+    pub stmts: Vec<Statement>
 }
 
 impl Segment {
@@ -69,17 +70,24 @@ impl Assembler {
         }
         return None;
     }
+    pub fn segments_mut(&mut self) -> &mut [Segment] {
+        &mut self.segments
+    }
     pub fn set_compare(&mut self, v: Vec<u8>) {
         self.compare = v;
     }
     pub fn new_segment(&mut self, span: ContextStr, s: StartKind, target: &mut Target) {
         let label_id = target.segment_label(self.segments.len());
         //println!("new segment: {}", label_id);
-        match s {
-            StartKind::Expression(ref c) => { self.labels.insert(label_id, c.clone()); },
-            _ => panic!("no freespace yet"),
-        }
         self.segments.push(Segment::new(span, label_id, s));
+    }
+    pub fn resolve_labels(&mut self) {
+        for s in self.segments.iter() {
+            match s.start {
+                StartKind::Expression(ref c) => { self.labels.insert(s.label_id, c.clone()); },
+                _ => panic!("unresolved freespace"),
+            }
+        }
     }
     pub fn append(&mut self, stmt: Statement, target: &mut Target) {
         if self.segments.len() == 0 {
@@ -120,12 +128,13 @@ impl Assembler {
             target.push_error(span, 0, "Label redefinition".into());
         }
     }
-    pub fn write_to_file<W:Write+Seek>(&self, target: &mut Target, mut w: W) -> Option<()> {
+    pub fn write_to_rom(&self, target: &mut Target, rom: &mut Rom) -> Option<()> {
         for i in self.segments.iter() {
             let addr = match &i.start {
-                StartKind::Expression(e) => e.try_eval_int(target, self)? as u64,
+                StartKind::Expression(e) => e.try_eval_int(target, self)? as u32,
                 _ => panic!("internal error: freespace pointer not resolved yet")
             };
+            /*
             // TODO: this needs to be abstracted into a mapper
             if  (addr&0xFE0000)==0x7E0000        //wram
             ||  (addr&0x408000)==0x000000        //hardware regs, ram mirrors, other strange junk
@@ -135,13 +144,13 @@ impl Assembler {
             }
             let offset = ((addr&0x7F0000)>>1|(addr&0x7FFF));
 
-            w.seek(SeekFrom::Start(offset));
+            w.seek(SeekFrom::Start(offset));*/
             let mut ch = 0;
             for s in i.stmts.iter() {
                 if ch != s.offset { println!("uh oh wrong offset: {} != {}", ch, s.offset); }
                 ch += s.size;
-                w.seek(SeekFrom::Start(offset + s.offset as u64));
-                let mut written = vec![];
+                //w.seek(SeekFrom::Start(offset + s.offset as u64));
+                let addr = addr + s.offset as u32;
                 match &s.kind {
                     StatementKind::Print { expr } => {
                         println!("trying: {:?}", expr);
@@ -149,58 +158,51 @@ impl Assembler {
                     },
                     StatementKind::DataStr { data, size } => {
                         if *size == 1 {
-                            w.write_all(data.as_bytes()).unwrap();
-                            written.write_all(data.as_bytes()).unwrap();
+                            rom.write_at(addr, data.as_bytes(), &s.span)?;
                         }
                     },
                     StatementKind::Data { expr } => {
                         let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
                         let val = val.to_le_bytes();
-                        w.write_all(&val[..s.size]).unwrap();
-                        written.write_all(&val[..s.size]).unwrap();
+                        rom.write_at(addr, &val[..s.size], &s.span)?;
                     },
                     StatementKind::InstructionRel { opcode, expr } => {
-                        w.write_all(&[*opcode]).unwrap();
-                        written.write_all(&[*opcode]).unwrap();
+                        rom.write_at(addr, &[*opcode], &s.span)?;
                         let mut val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
-                        //println!("rel val: {}", val);
+                        //println!("rel val: {:06X} - {:06X}", val, addr + s.size as u32);
                         if expr.contains_label() {
                             // actually make relative
                             if let Some(base) = s.base {
                                 val = val.wrapping_sub(base as u32 + s.offset as u32);
                             } else {
-                                val = val.wrapping_sub(addr as u32 + s.offset as u32 + s.size as u32);
+                                val = val.wrapping_sub(addr as u32 + s.size as u32);
                             }
                         }
                         let val = val.to_le_bytes();
-                        w.write_all(&val[..s.size-1]).unwrap();
-                        written.write_all(&val[..s.size-1]).unwrap();
+                        rom.write_at(addr+1, &val[..s.size-1], &s.span)?;
                     },
                     StatementKind::Instruction { opcode, expr } => {
-                        w.write_all(&[*opcode]).unwrap();
-                        written.write_all(&[*opcode]).unwrap();
+                        rom.write_at(addr, &[*opcode], &s.span);
                         if s.size > 1 {
                             let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
                             let val = val.to_le_bytes();
-                            w.write_all(&val[..s.size-1]).unwrap();
-                            written.write_all(&val[..s.size-1]).unwrap();
+                            rom.write_at(addr+1, &val[..s.size-1], &s.span)?;
                         }
                     },
                     StatementKind::InstructionRep { opcode } => {
-                        for _ in 0..s.size {
-                            w.write_all(&[*opcode]).unwrap();
-                            written.write_all(&[*opcode]).unwrap();
+                        for i in 0..s.size as u32 {
+                            rom.write_at(addr+i, &[*opcode], &s.span)?;
                         }
                     },
                     StatementKind::Skip => {}
                     StatementKind::Binary { data } => {
-                        w.write_all(&data).unwrap();
-                        written.write_all(&data).unwrap();
+                        rom.write_at(addr, &data, &s.span);
                     }
                     _ => {}
                 }
-                println!("{:06X} {:X?} -> {:X?}", offset + s.offset as u64, s, written);
-                if self.compare.len() > 0 {
+                let written = &rom.as_slice()[rom.mapper().map_to_file(addr as _).unwrap()..][..s.size];
+                println!("{:06X} {:X?} -> {:02X?}", addr, s, written);
+                /*if self.compare.len() > 0 {
                     let lhs = &written[..];
                     let rhs = &self.compare[s.offset..s.offset+s.size];
                     if lhs != rhs {
@@ -209,7 +211,7 @@ impl Assembler {
                     } else {
                         println!("test passed: {:02X?} == {:02X?}", lhs, rhs);
                     }
-                }
+                }*/
             }
         }
         Some(())

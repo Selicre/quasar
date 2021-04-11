@@ -3,6 +3,7 @@ use crate::context::ContextStr;
 use crate::executor::Target;
 use crate::lexer::{TokenList, TokenKind};
 use crate::assembler::Assembler;
+use crate::message::errors;
 
 mod parser;
 mod evaluator;

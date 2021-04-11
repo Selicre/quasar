@@ -1,3 +1,5 @@
+#![deny(unused_must_use)]
+
 mod splitter;
 mod context;
 mod message;
@@ -6,19 +8,31 @@ mod lexer;
 mod expression;
 mod assembler;
 mod instruction;
+mod rom;
+mod freespace;
 
 use executor::Target;
 use assembler::Assembler;
 use context::ContextStr;
 use message::MsgQueue;
+use rom::Rom;
 
 fn main() {
-    let arg = std::env::args().nth(1).expect("args pls");
+    let asm_file = std::env::args().nth(1).expect("args pls");
+    let rom_file = std::env::args().nth(2).expect("args pls");
+    let mut rom_cache = std::fs::read(&rom_file).unwrap_or(vec![]);
+    if rom_file.ends_with(".smc") && rom_cache.len() > 0x200 {
+        rom_cache.drain(0..0x200);
+    }
+    let mut rom = Rom::new(rom_cache);
+
+
     //let mut compare = std::fs::read("compare.bin").unwrap();
-    let mut target = Target::new();
+    let mut target = Target::new(rom.clone());
     let mut asm = Assembler::new();
     //asm.set_compare(compare);
-    executor::exec_file(arg.into(), ContextStr::cli(), &mut target, &mut asm);
+
+    executor::exec_file(asm_file.into(), ContextStr::cli(), &mut target, &mut asm);
     MsgQueue::drain(|i| {
         println!("{}", i);
     });
@@ -35,8 +49,18 @@ fn main() {
         }
     }*/
 
-    let mut out = std::io::BufWriter::new(std::fs::File::create("out.sfc").unwrap());
-    asm.write_to_file(&mut target, &mut out);
+    /*let mut out = std::io::BufWriter::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open("out.sfc")
+            .unwrap()
+    );*/
+
+    freespace::resolve_freespace(&mut rom, &mut asm);
+    asm.resolve_labels();
+    asm.write_to_rom(&mut target, &mut rom);
     MsgQueue::drain(|i| {
         println!("{}", i);
     });
@@ -44,5 +68,6 @@ fn main() {
         println!("Assembly failed");
         return;
     }
+    std::fs::write("out.sfc", rom.as_slice()).unwrap();
     target.profiler("finished");
 }

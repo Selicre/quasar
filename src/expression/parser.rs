@@ -165,7 +165,7 @@ impl S {
         write!(f, "{:?} \"{}\"", self.node.1, self.node.0)?;
         for i in self.children.iter() {
             f.pad("\n")?;
-            f.pad(&"  ".repeat(level+1));
+            f.pad(&"  ".repeat(level+1))?;
             i.fmt_inner(f, level+1)?;
         }
         if self.children.len() > 0 { f.pad(")")?; }
@@ -174,7 +174,7 @@ impl S {
 }
 impl std::fmt::Display for S {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.fmt_inner(f, 0);
+        self.fmt_inner(f, 0)?;
         Ok(())
     }
 }

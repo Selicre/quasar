@@ -49,15 +49,6 @@ fn main() {
         }
     }*/
 
-    /*let mut out = std::io::BufWriter::new(
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open("out.sfc")
-            .unwrap()
-    );*/
-
     freespace::resolve_freespace(&mut rom, &mut asm);
     asm.resolve_labels();
     asm.write_to_rom(&mut target, &mut rom);

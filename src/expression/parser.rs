@@ -50,8 +50,9 @@ pub fn parse_label(tokens: &mut TokenList<'_>, has_macro: bool, target: &mut Tar
                     let mut depth = t.span.len();
                     let c = peek.next();
                     if let Some(c) = c {
-                        if c.is_ident() {
-                            (c.span.clone(), Label::Named { stack: target.resolve_sub(depth, c.span.clone()), invoke })
+                        if c.is_ident() || c.is_decimal() { // grumble grumble
+                            let mut label = Label::Named { stack: target.resolve_sub(depth, c.span.clone()), invoke };
+                            (c.span.clone(), label)
                         } else {
                             return None;
                         }
@@ -83,6 +84,7 @@ fn parse_unop(tokens: &mut TokenList<'_>) -> Option<Node> {
             // unop or sublabel
             let op = match &*t.span {
                 "+" => Unop::Unp,
+                "#" => Unop::Unp,
                 "-" => Unop::Unm,
                 "~" => Unop::BitNot,
                 "!" => Unop::Not,
@@ -118,6 +120,7 @@ fn parse_binop(tokens: &mut TokenList<'_>) -> Option<Node> {
                 "^"  => BitXor,
                 "**" => Pow,
                 "==" => Eq,
+                "=" => Eq,
                 "!=" => Ne,
                 ">"  => Gt,
                 ">=" => Ge,

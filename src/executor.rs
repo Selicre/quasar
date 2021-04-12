@@ -29,6 +29,8 @@ pub struct Target {
     functions: HashMap<String, (usize, Expression)>,
     label_idx: IndexSet<Label>,
     label_ctx: LabelCtx,
+    table: HashMap<char, u32>,
+    table_stack: Vec<HashMap<char, u32>>,
     profiler: std::time::Instant,
 }
 impl Target {
@@ -45,6 +47,8 @@ impl Target {
             cur_macro: None,
             label_idx: IndexSet::new(),
             label_ctx: LabelCtx::default(),
+            table: HashMap::new(),
+            table_stack: vec![],
             profiler: std::time::Instant::now()
         }
     }
@@ -85,7 +89,8 @@ impl Target {
     }
     pub fn macro_invoke(&self) -> Option<usize> { self.macro_label_ctx.last().map(|c| c.0) }
     pub fn defines(&self) -> &HashMap<String, Vec<Token>> { &self.defines }
-    pub fn label_id(&mut self, label: Label) -> usize {
+    pub fn label_id(&mut self, mut label: Label) -> usize {
+        label.glue_sub();
         self.label_idx.insert_full(label).0
     }
     pub fn label_name(&mut self, id: usize) -> Option<&Label> {
@@ -149,6 +154,7 @@ impl Target {
             },
             _ => {}
         }
+        label.glue_sub();
         let (id, _) = self.label_idx.insert_full(label.clone());
         println!("set label {} to {:?}", id, label);
         id
@@ -323,7 +329,7 @@ pub fn exec_macro(name: &str, args: Vec<Vec<Token>>, source: ContextStr, target:
     target.macro_label_ctx.pop();
 }
 
-pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &mut Target) -> bool {
+pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &mut Target) -> Result<bool, Message> {
     let mut recursion = 0;
     let mut expanded = false;
 
@@ -331,8 +337,7 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
     while let Some(c) = tokens.iter().position(|c| c.is_define()) {
         if recursion > 128 {
             //let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
-            errors::define_rec_limit(line.clone()).push();
-            break;
+            return Err(errors::define_rec_limit(line.clone()));
         }
         let token = tokens[c].clone();
         let def = token.as_define().unwrap();
@@ -340,7 +345,7 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
 
         let temp;
         let def_s = if tokens[c].is_define_escaped().unwrap() {
-            temp = if let Some(c) = lexer::expand_str(def.clone(), target) { c } else { return false; };
+            temp = if let Some(c) = lexer::expand_str(def.clone(), target) { c } else { panic!("what") };
             &*temp
         } else {
             &*def
@@ -365,9 +370,8 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
             tokens.splice(c..c+1, value);
         } else {
             //let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
-            errors::define_unknown(token.span.clone()).push();
-            break;
+            return Err(errors::define_unknown(token.span.clone()));
         }
     }
-    expanded
+    Ok(expanded)
 }

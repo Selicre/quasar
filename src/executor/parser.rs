@@ -92,7 +92,8 @@ pub(super) fn exec_stmt(
             expand_macro_args(&mut v, macro_args, &i, target);
         }
         if exp_defines {
-            expand_defines(&mut v, &i, target);
+            let res = expand_defines(&mut v, &i, target);
+            if let Err(e) = res { e.push(); return; }
         }
         if do_math {
             let mut t = TokenList::new(&v);
@@ -128,7 +129,13 @@ pub(super) fn exec_stmt(
             glue_tokens(&mut tokens);
         }
     }
-    expanded |= expand_defines(&mut tokens, &i, target);
+    expanded |= match expand_defines(&mut tokens, &i, target) {
+        Ok(b) => b,
+        Err(e) => if ctx.enabled() {
+            e.push();
+            return;
+        } else { false }
+    };
     if expanded {
         glue_tokens(&mut tokens);
 
@@ -462,7 +469,23 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                     let s = tokens.next_non_wsp().unwrap();
                     let c = if let Some(c) = lexer::expand_str(s.span.clone(), target) { c } else { return; };
                     let c = lexer::display_str(&c);
-                    let stmt = Statement::data_str(c, size, cmd.span.clone());
+                    let mut map = vec![];
+                    for i in c.chars() {
+                        if let Some(val) = target.table.get(&i) {
+                            // If table entry present, truncate that
+                            map.extend_from_slice(&val.to_le_bytes()[..size]);
+                        } else {
+                            if size == 1 {
+                                // If db, encode as utf-8
+                                let mut buf = [0;4];
+                                map.extend_from_slice(i.encode_utf8(&mut buf).as_bytes());
+                            } else {
+                                // otherwise, encode as utf-32
+                                map.extend_from_slice(&(i as u32).to_le_bytes()[..size]);
+                            }
+                        }
+                    }
+                    let stmt = Statement::binary(map, cmd.span.clone());
                     asm.append(stmt, target);
                 } else {
                     let c = Expression::parse(&mut tokens, target);
@@ -480,9 +503,43 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 }
             }
         }
-        "header" => {},     // TODO
+        "header" => {},
         "lorom" => {},
+        "bank" => {},
+        "math" => {},
+        "table" => {
+            // TODO: handle ,ltr/,rtl
+            let temp;
+            let c = if let Some(c) = tokens.peek_non_wsp() {
+                if c.is_string() {
+                    temp = if let Some(c) = lexer::expand_str(c.span.clone(), target) { c } else { return; };
+                    &temp[1..temp.len()-1]
+                } else {
+                    temp = tokens.rest().iter().map(|c| &*c.span).collect::<Vec<_>>().concat();
+                    temp.trim()
+                }
+            } else {
+                ""
+            };
+
+            // TODO: handle errors
+            let table = String::from_utf8(std::fs::read(c).expect("can't find file")).expect("file not utf-8");
+            for i in table.lines() {
+                if i.len() == 0 { continue; }
+                let mut c = i.chars();
+                let ch = c.next().unwrap();
+                assert_eq!(c.next().unwrap(), '=');
+                let value = u32::from_str_radix(c.as_str(), 16).unwrap();
+                target.table.insert(ch, value);
+            }
+        }
+        "cleartable" => {
+            target.table.clear();
+        }
+        "@" => {},
+        "prot" => {},
         "autoclean" => {
+            // TODO: actually clean shit
             exec_enabled(tokens, newline, target, ctx, asm);
         }
         "freespace" | "freecode" | "freedata" => {
@@ -541,9 +598,18 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         "print" => {
             //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
             //target.push_msg(Message::info(cmd.span.clone(), 0, c))
-            if tokens.peek_non_wsp().is_none() {
-                errors::cmd_no_arg(cmd.span.clone(), "print", "message", "\"hello world\"").push();
-                return;
+            let next = tokens.peek_non_wsp();
+            match next {
+                Some(c) if c.span.eq("freespaceuse") => {
+                    let stmt = Statement::print(Expression::string(c.span.clone(), "freespaceuse"), cmd.span.clone());
+                    asm.append(stmt, target);
+                    return;
+                }
+                Some(_) => {}
+                None => {
+                    errors::cmd_no_arg(cmd.span.clone(), "print", "message", "\"hello world\"").push();
+                    return;
+                }
             }
 
             let c = Expression::parse(&mut tokens, target);

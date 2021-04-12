@@ -91,7 +91,7 @@ impl Rom {
             return None;
         };
         let end = offset+data.len();
-        if !self.bankcross && offset>>15 != end>>15 {
+        if !self.bankcross && offset>>15 != (end-1)>>15 {
             errors::rom_bank_crossed(span.clone()).push();
             return None;
         }
@@ -105,6 +105,10 @@ impl Rom {
         &self.buf
     }
     pub fn freespace_area(&self) -> &[u8] {
-        &self.buf[0x80000..]
+        if self.buf.len() > 0x80000 {
+            &self.buf[0x80000..]
+        } else {
+            &[]
+        }
     }
 }

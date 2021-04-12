@@ -35,6 +35,9 @@ impl Expression {
     pub fn value(span: ContextStr, value: f64) -> Self {
         Self { nodes: vec![(span, ExprNode::Value(Value::Literal { value, size_hint: 0 }))] }
     }
+    pub fn string(span: ContextStr, value: impl Into<String>) -> Self {
+        Self { nodes: vec![(span, ExprNode::Value(Value::String(value.into())))] }
+    }
     pub fn label_offset(span: ContextStr, label: usize, value: f64) -> Self {
         Self { nodes: vec![
             (span.clone(), ExprNode::Value(Value::Literal { value, size_hint: 0 })),
@@ -122,6 +125,11 @@ pub enum Label {
     Segment(usize)
 }
 impl Label {
+    pub fn glue_sub(&mut self) {
+        if let Label::Named { ref mut stack, .. } = self {
+            *stack = vec![stack.join("_")];
+        }
+    }
     pub fn no_colon(&self) -> bool {
         if let Label::Named { ref stack, .. } = self {
             stack.len() > 1

@@ -183,7 +183,7 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             }
             let span = input.prefix_from(needle);
             out.push(Token { span, kind: TokenKind::String });
-        } else if c == '!' {
+        } else if c == '!' && !input.starts_with("!=") {
             if let Some((span, escaped)) = parse_define(&mut input, target) {
                 out.push(Token { span, kind: TokenKind::Define { escaped } });
             } else {
@@ -288,7 +288,8 @@ pub fn expand_str(mut input: ContextStr, target: &mut Target) -> Option<String> 
             } else { &*name };
             if let Some(value) = target.defines().get(name_s) {
                 let mut value = value.clone();
-                crate::executor::expand_defines(&mut value, &orig, target);
+                let res = crate::executor::expand_defines(&mut value, &orig, target);
+                if let Err(e) = res { e.push(); return None; }
                 let value = value.iter().map(|c| &*c.span).collect::<Vec<_>>().concat();
                 out.push_str(&value);
                 continue;

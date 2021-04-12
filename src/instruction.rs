@@ -102,7 +102,7 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
 
     let mut size_set = false;
     // parse sizing
-    if tokens.peek_non_wsp().map(|c| &*c.span) == Some(".") {
+    if tokens.peek().map(|c| &*c.span) == Some(".") {
         let dot = tokens.next_non_wsp().unwrap();
         let s = tokens.next_non_wsp();
         size_set = true;
@@ -340,6 +340,14 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
 
     if size.is_none() {
         size = expr.size_hint();
+    }
+
+    if size.is_none() && matches!(arg, ArgumentKind::Immediate) {
+        if expr.contains_label() {
+            size = Some(2);
+        } else {
+            size = Some(1);
+        }
     }
 
     if let Some(opcode) = try_opcode(instr.span.as_bytes(), AddressingMode::Relative) {

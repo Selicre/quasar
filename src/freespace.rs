@@ -4,10 +4,16 @@ use crate::context::ContextStr;
 
 use bytes::Buf;
 
-pub fn parse_freespace(rom: &mut Rom) -> Vec<[usize;2]> {
+pub struct RomSpace {
+    free: Vec<[usize;2]>,
+    rats: Vec<[usize;2]>,
+}
+
+pub fn parse_freespace(rom: &mut Rom) -> RomSpace {
     let mut bank = rom.freespace_area();
     let start = bank;
-    let mut areas = vec![];
+    let mut free = vec![];
+    let mut rats = vec![];
     let mut current_area = None;
 
     let get_file_ptr = |bank: &[u8]| {
@@ -23,7 +29,7 @@ pub fn parse_freespace(rom: &mut Rom) -> Vec<[usize;2]> {
             let r = get_file_ptr(bank);
             if r-c >= 16 {
                 //println!("free space at ${:06X}, len {:04X}", get_addr(c), r-c);
-                areas.push([c,r]);
+                free.push([c,r]);
             }
         }
     };
@@ -35,6 +41,8 @@ pub fn parse_freespace(rom: &mut Rom) -> Vec<[usize;2]> {
             if len == !unlen {
                 push_fsp(&mut current_area, bank);
                 //println!("rat at ${:06X}, len {:04X}", get_addr(get_file_ptr(bank)), len);
+                let ptr = get_file_ptr(bank);
+                rats.push([ptr, ptr+len as usize]);
                 bank.advance(len as usize);
             }
         } else {
@@ -50,7 +58,7 @@ pub fn parse_freespace(rom: &mut Rom) -> Vec<[usize;2]> {
         }
     }
     push_fsp(&mut current_area, bank);
-    areas
+    RomSpace { free, rats }
 }
 
 pub fn write_rat(rom: &mut Rom, offset: usize, len: usize, span: &ContextStr) {
@@ -67,11 +75,13 @@ pub fn resolve_freespace(rom: &mut Rom, asm: &mut Assembler) {
     for i in asm.segments_mut() {
         match i.start {
             StartKind::Freecode | StartKind::Freedata => {
-                if let Some(fsp_id) = fsp.iter().position(|c| c[1] - c[0] > i.offset + 8) {
+                if let Some(fsp_id) = fsp.free.iter().position(|c| c[1] - c[0] > i.offset + 8) {
+                    println!("using freespace {:X?} len {:X}", fsp.free[fsp_id], i.offset);
                     // TODO: figure out bankcross
-                    let offset = fsp[fsp_id][0];
-                    fsp[fsp_id][0] += i.offset + 8;
+                    let offset = fsp.free[fsp_id][0];
+                    fsp.free[fsp_id][0] += i.offset + 8;
                     write_rat(rom, offset, i.offset, &i.span);
+                    fsp.rats.push([offset, offset+i.offset+8]);
                     let addr = rom.mapper().map_to_addr(offset+8);
                     i.start = StartKind::Expression(crate::expression::Expression::value(i.span.clone(), addr as f64));
                 } else {

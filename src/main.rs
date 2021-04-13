@@ -61,4 +61,6 @@ fn main() {
     }
     std::fs::write("out.sfc", rom.as_slice()).unwrap();
     target.profiler("finished");
+    // this actually takes a surprisingly long time
+    std::mem::forget(asm);
 }

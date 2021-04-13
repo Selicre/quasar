@@ -253,7 +253,7 @@ impl Expression {
         if self.nodes.len() == 0 { return None; }
         let mut stack = vec![];
         self.try_eval_stack(constexpr, target, asm, &mut stack, &[], &mut vec![])?;
-        let val = stack.pop().expect(&format!("unbalanced expr: {:?}", self));
+        let val = stack.pop().ok_or_else(|| format!("unbalanced expr: {:?}", self)).unwrap();
         //println!("value: {:?}", val);
         Some(val)
     }

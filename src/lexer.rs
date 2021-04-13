@@ -1,6 +1,7 @@
 use crate::context::{LineInfo, ContextStr};
 use crate::executor::Target;
 use crate::message::errors;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
 pub struct Token {
@@ -344,7 +345,7 @@ pub fn expand_str(mut input: ContextStr, target: &mut Target) -> Option<String> 
                 &temp
             } else { &*name };
             if let Some(value) = target.defines().get(name_s) {
-                let mut value = value.clone();
+                let mut value = Cow::from(value.to_vec());
                 let res = crate::executor::expand_defines(&mut value, &orig, target);
                 if let Err(e) = res { e.push(); return None; }
                 let value = value.iter().map(|c| &*c.span).collect::<Vec<_>>().concat();
@@ -419,11 +420,22 @@ impl<'a> TokenList<'a> {
     pub fn seek(&mut self, pos: usize) { self.pos = pos; }
     pub fn split_off(&mut self, newline: bool) -> Option<(TokenList<'a>, bool)> {  // tokens, has newline
         if self.pos == self.inner.len() { return None; }
+        /*
         let c1 = self.inner[self.pos..].windows(3)
             .position(|i| i[0].is_non_nl_wsp() && &*i[1].span == ":" && i[2].is_non_nl_wsp())
             .map(|c| (c, c+2, false));
         let c2 = self.inner[self.pos..].iter().position(|i| i.is_newline()).map(|c| (c,c+1, true));
         let v = c1.into_iter().chain(c2.into_iter()).min();
+        */
+        let v = self.inner[self.pos..].windows(3).enumerate().find_map(|(c,i)| {
+            if i[0].is_newline() {
+                Some((c, c+1, true))
+            } else if i[0].is_non_nl_wsp() && &*i[1].span == ":" && i[2].is_non_nl_wsp() {
+                Some((c, c+2, false))
+            } else {
+                None
+            }
+        });
         if let Some((c,e,nl)) = v {
             let pos = self.pos;
             let sp = TokenList { inner: &self.inner[..pos+c], pos };

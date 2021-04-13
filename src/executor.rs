@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::fmt::Display;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::borrow::Cow;
 
 use indexmap::IndexSet;
 
@@ -116,7 +117,7 @@ impl Target {
     }
     pub fn finish_macro(&mut self) {
         let m = self.cur_macro.take().unwrap();
-        println!("got macro: {:?}", m.1.blocks);
+        //println!("got macro: {:?}", m.1.blocks);
         self.macros.insert(m.0, m.1);
     }
     pub fn get_macro(&self, name: &str) -> Option<&Macro> {
@@ -161,7 +162,7 @@ impl Target {
         //label.glue_sub();
         //let (id, _) = self.label_idx.insert_full(label.clone());
         let id = self.label_id(label.clone());
-        println!("set label {} to {:?}", id, label);
+        //println!("set label {} to {:?}", id, label);
         id
     }
     pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
@@ -312,7 +313,7 @@ pub fn exec_file(filename: &str, source: ContextStr, target: &mut Target, asm: &
     ctx.path.pop();
     while let Some((i, nl)) = { tokens.seek(ctx.exec_ptr); tokens.split_off(true) } {
         ctx.next_exec_ptr = tokens.pos();
-        exec_stmt(i.rest().to_vec(), nl, target, &mut ctx, &HashMap::new(), asm);
+        exec_stmt(i.rest(), nl, target, &mut ctx, &HashMap::new(), asm);
         ctx.exec_ptr = ctx.next_exec_ptr;
     }
     target.profiler(&format!("done {}", ff));
@@ -333,13 +334,13 @@ pub fn exec_macro(name: &str, args: Vec<Vec<Token>>, source: ContextStr, target:
     target.macro_label_ctx.push((target.macro_invoke, LabelCtx::default()));
     target.macro_invoke += 1;
     while let Some((t, newline)) = mac.blocks.get(ctx.exec_ptr) {
-        exec_stmt(t.clone(), *newline, target, &mut ctx, &args, asm);
+        exec_stmt(t, *newline, target, &mut ctx, &args, asm);
         ctx.exec_ptr += 1;
     }
     target.macro_label_ctx.pop();
 }
 
-pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &mut Target) -> Result<bool, Message> {
+pub fn expand_defines(tokens: &mut Cow<'_, [Token]>, line: &ContextStr, target: &mut Target) -> Result<bool, Message> {
     let mut recursion = 0;
     let mut expanded = false;
 
@@ -377,7 +378,7 @@ pub fn expand_defines(mut tokens: &mut Vec<Token>, line: &ContextStr, target: &m
             recursion += 1;
             let mut value = value.clone();
             value.iter_mut().for_each(|c| c.span.set_parent(token.span.clone()));
-            tokens.splice(c..c+1, value);
+            tokens.to_mut().splice(c..c+1, value);
         } else {
             //let token_str = tokens.iter().map(|c| c.span.to_string()).collect::<Vec<_>>().concat();
             return Err(errors::define_unknown(token.span.clone()));

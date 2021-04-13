@@ -180,7 +180,6 @@ impl ContextStr {
             source: self.source.clone(),
             parent: self.parent.clone(),
         };
-
         let start = self.range.start;
         self.range.start += by;
         let prefix = &self.full[start..][..by];

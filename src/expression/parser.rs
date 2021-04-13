@@ -298,7 +298,7 @@ fn parse_expr(tokens: &mut TokenList<'_>, min_bp: u8, target: &mut Target) -> Op
 impl Expression {
     pub fn parse(tokens: &mut TokenList<'_>, target: &mut Target) -> Self {
         let s = parse_expr(tokens, 0, target);
-        let mut nodes = vec![];
+        let mut nodes = Vec::with_capacity(4);
         s.map(|s| {
             //println!("{}", s);
             s.to_vec(&mut nodes);

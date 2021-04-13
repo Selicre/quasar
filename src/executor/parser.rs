@@ -1,6 +1,8 @@
 use super::*;
+
+
 pub(super) fn exec_stmt(
-    mut tokens: Vec<Token>,
+    tokens: &[Token],
     newline: bool,
     target: &mut Target,
     ctx: &mut ExecCtx,
@@ -11,6 +13,8 @@ pub(super) fn exec_stmt(
     //let mut tokens = lexer::tokenize_stmt(i.clone(), target, target.cur_macro.is_some() || macro_args.len() > 0);
 
     if tokens.len() == 0 { return; }
+
+    let mut tokens = Cow::from(tokens);
 
     if &*tokens[0].span == "macro" && ctx.enabled() {
         if target.cur_macro.is_some() {
@@ -36,20 +40,20 @@ pub(super) fn exec_stmt(
             target.finish_macro();
             return;
         }
-        c.blocks.push((tokens, newline));
+        c.blocks.push((tokens.to_vec(), newline));
         return;
     }
     let mut expanded = false;
     if macro_args.len() != 0 {
-        expanded |= expand_macro_args(&mut tokens, macro_args, target);
+        expanded |= expand_macro_args(tokens.to_mut(), macro_args, target);
         if expanded {
-            glue_tokens(&mut tokens);
+            glue_tokens(tokens.to_mut());
         }
     }
 
     // Parse setting defines as special syntax
     // TODO: make this check not horrible
-    if matches!(tokens.as_slice(),
+    if matches!(&tokens[..],
             [def,ws1,op,ws2,value,..]
             if def.is_define()
             && ws1.is_whitespace()
@@ -89,14 +93,14 @@ pub(super) fn exec_stmt(
                 errors::define_trailing_chars(tokens[5].span.clone()).push();
                 return;
             }
-            v = lexer::tokenize_stmt(ctx, target, false);
+            v = Cow::from(lexer::tokenize_stmt(ctx, target, false));
         } else {
-            v = tokens[4..].to_vec();
+            v = Cow::from(&tokens[4..]);
         }
 
         let name = def.as_define().unwrap();
         if macro_args.len() != 0 {
-            expand_macro_args(&mut v, macro_args, target);
+            expand_macro_args(v.to_mut(), macro_args, target);
         }
         if exp_defines {
             let res = expand_defines(&mut v, &tokens[0].span, target);
@@ -118,13 +122,13 @@ pub(super) fn exec_stmt(
         };
         if append {
             let entry = target.defines.entry(name).or_insert(vec![]);
-            entry.append(&mut v);
+            entry.append(v.to_mut());
         } else if check_existing {
             if !target.defines.contains_key(&name) {
-                target.defines.insert(name, v);
+                target.defines.insert(name, v.to_vec());
             }
         } else {
-            target.defines.insert(name, v);
+            target.defines.insert(name, v.to_vec());
         }
 
         return;
@@ -139,7 +143,7 @@ pub(super) fn exec_stmt(
         } else { false }
     };
     if expanded {
-        glue_tokens(&mut tokens);
+        glue_tokens(tokens.to_mut());
 
         let mut tokens = TokenList::new(&tokens);
         // Split statements and process them separately
@@ -207,7 +211,7 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
 
 
 pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
-    if true {
+    if false {
         print!("{} ", if ctx.enabled() { "+" } else { " " });
         for i in tokens.rest().iter() {
             print!("{:?} ", i.span);
@@ -307,7 +311,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         asm.set_label(id, expr, cmd.span.clone(), target);
         return;
     }
-    match &*cmd.span.to_lowercase() {
+    match &*cmd.span.to_ascii_lowercase() {
         "if" => {
             if let Some(_) = tokens.peek_non_wsp() {
                 let expr = Expression::parse(&mut tokens, target);
@@ -441,7 +445,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             }
             let expr = Expression::parse(&mut tokens, target);
             let mut count = expr.eval_const(target);
-            println!("rep expr: {:?}", expr);
+            //println!("rep expr: {:?}", expr);
             if count < 0.0 { count = 0.0; }
             ctx.rep_count = Some(count as usize);
         }
@@ -622,6 +626,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             let stmt = Statement::binary(file, cmd.span.clone());
             asm.append(stmt, target);
         }
+        "padbyte" => {},    // TODO
         "pad" => {
             let val = if let Some(c) = tokens.peek_non_wsp() {
                 let c = Expression::parse(&mut tokens, target);
@@ -647,6 +652,12 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             let stmt = Statement::base(val, cmd.span.clone());
             asm.append(stmt, target);
         }
+        "check" => {
+            let param = tokens.next_non_wsp();
+            let value = tokens.next_non_wsp().unwrap();
+            let stmt = Statement::bankcross(value.span.eq("off"), cmd.span.clone());
+            asm.append(stmt, target);
+        },  // TODO
         "warnpc" => {
             //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
             //target.push_msg(Message::info(cmd.span.clone(), 0, c))

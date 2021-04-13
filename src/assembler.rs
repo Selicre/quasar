@@ -150,7 +150,7 @@ impl Assembler {
                 if ch != s.offset { println!("uh oh wrong offset: {} != {}", ch, s.offset); }
                 ch += s.size;
                 //w.seek(SeekFrom::Start(offset + s.offset as u64));
-                let addr = addr + s.offset as u32;
+                let addr = label_offset(addr, s.offset as u32);
                 match &s.kind {
                     StatementKind::Print { expr } => {
                         let val = if let Some(c) = expr.try_eval(false, target, self) { c } else { continue; };
@@ -205,10 +205,18 @@ impl Assembler {
                             continue;
                         }
                     }
+                    StatementKind::Bankcross(n) => {
+                        rom.set_bankcross(*n);
+                    }
                     _ => {}
                 }
-                let written = &rom.as_slice()[rom.mapper().map_to_file(addr as _).unwrap()..][..s.size.min(16)];
-                println!("{:06X} {} -> {:02X?} [{}]", addr, s, written, (&*s.span.full_line()).trim());
+                /*
+                if let Some(off) = rom.mapper().map_to_file(addr as _) {
+                    if off >= rom.as_slice().len() { continue; }
+                    let written = &rom.as_slice()[off..][..s.size.min(16)];
+                    println!("{:06X} {} -> {:02X?} [{}]", addr, s, written, (&*s.span.full_line()).trim());
+                }
+                */
                 /*if self.compare.len() > 0 {
                     let lhs = &written[..];
                     let rhs = &self.compare[s.offset..s.offset+s.size];
@@ -228,6 +236,9 @@ impl Assembler {
     }
 }
 
+pub fn label_offset(start: u32, offset: u32) -> u32 {
+    start + (offset&0x7FFF) + ((offset&0xFF8000) << 1)
+}
 
 #[derive(Debug)]
 pub struct Statement {
@@ -275,7 +286,8 @@ pub enum StatementKind {
     },
     WarnPc {
         expr: Expression
-    }
+    },
+    Bankcross(bool),
 }
 
 impl Statement {
@@ -318,6 +330,9 @@ impl Statement {
     }
     pub fn warnpc(expr: Expression, span: ContextStr) -> Self {
         Statement::new(StatementKind::WarnPc { expr }, 0, span)
+    }
+    pub fn bankcross(value: bool, span: ContextStr) -> Self {
+        Statement::new(StatementKind::Bankcross(value), 0, span)
     }
 }
 impl std::fmt::Display for Statement {

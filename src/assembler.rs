@@ -153,8 +153,8 @@ impl Assembler {
                 let addr = addr + s.offset as u32;
                 match &s.kind {
                     StatementKind::Print { expr } => {
-                        println!("trying: {:?}", expr);
-                        println!("{:?}", expr.try_eval(false, target, self));
+                        let val = if let Some(c) = expr.try_eval(false, target, self) { c } else { continue; };
+                        println!("{:?}", val.1);
                     },
                     StatementKind::DataStr { data, size } => {
                         if *size == 1 {
@@ -198,10 +198,17 @@ impl Assembler {
                     StatementKind::Binary { data } => {
                         rom.write_at(addr, &data, &s.span);
                     }
+                    StatementKind::WarnPc { expr } => {
+                        let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
+                        if addr > val {
+                            crate::message::errors::rom_warnpc(s.span.clone(), addr, val).push();
+                            continue;
+                        }
+                    }
                     _ => {}
                 }
-                let written = &rom.as_slice()[rom.mapper().map_to_file(addr as _).unwrap()..][..s.size];
-                println!("{:06X} {:X?} -> {:02X?}", addr, s, written);
+                let written = &rom.as_slice()[rom.mapper().map_to_file(addr as _).unwrap()..][..s.size.min(16)];
+                println!("{:06X} {} -> {:02X?} [{}]", addr, s, written, (&*s.span.full_line()).trim());
                 /*if self.compare.len() > 0 {
                     let lhs = &written[..];
                     let rhs = &self.compare[s.offset..s.offset+s.size];
@@ -265,6 +272,9 @@ pub enum StatementKind {
     Skip,
     Base {
         expr: Option<usize>
+    },
+    WarnPc {
+        expr: Expression
     }
 }
 
@@ -305,5 +315,33 @@ impl Statement {
     pub fn binary(data: Vec<u8>, span: ContextStr) -> Self {
         let len = data.len();
         Statement::new(StatementKind::Binary { data }, len, span)
+    }
+    pub fn warnpc(expr: Expression, span: ContextStr) -> Self {
+        Statement::new(StatementKind::WarnPc { expr }, 0, span)
+    }
+}
+impl std::fmt::Display for Statement {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use std::fmt::Write;
+        write!(f, "{:04X} ", self.offset)?;
+        if let Some(b) = self.base {
+            write!(f, "[{:06X}] ", b)?;
+        }
+        write!(f, "len {:X} ", self.size)?;
+        match &self.kind {
+            StatementKind::Data { expr } => write!(f, "data  {}", expr),
+            StatementKind::Print { expr } => write!(f, "print {}", expr),
+            StatementKind::Instruction { opcode, expr } => {
+                write!(f, "instr ${:02X}", opcode)?;
+                if !expr.is_empty() {
+                    write!(f, ": {}", expr)?;
+                }
+                Ok(())
+            },
+            StatementKind::Binary { data } => write!(f, "bin  "),
+            StatementKind::Label(id) => write!(f, "label %{}", id),
+            c => write!(f, "{:?}", c)
+        }?;
+        Ok(())
     }
 }

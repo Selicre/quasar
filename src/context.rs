@@ -110,6 +110,16 @@ impl ContextStr {
             parent: None,
         }
     }
+    pub fn full_line(&self) -> ContextStr {
+        let start = self.full[..self.range.start].rfind('\n').map(|c| c+1).unwrap_or(0);
+        let end = self.full[self.range.end..].find('\n').map(|c| c + self.range.end).unwrap_or(self.full.len() - self.range.end);
+        ContextStr {
+            full: self.full.clone(),
+            range: start..end,
+            source: self.source.clone(),
+            parent: None
+        }
+    }
     pub fn line_highlight(&self, severity: crate::message::Severity) -> String {
         // this whole thing is stupid and temporary
         let start = self.full[..self.range.start].rfind('\n').map(|c| c+1).unwrap_or(0);
@@ -119,7 +129,7 @@ impl ContextStr {
             let pad_end = " ".repeat(end - self.range.end);
             let highlight = "^".repeat(self.range.end - self.range.start);
             let pad_line_num = " ".repeat(format!("{}", self.source.line).len());
-            format!(" {} |\n {} | {}\n {} | \x1B[1;38;5;{}m{}{}{}\x1B[0m", pad_line_num, self.source.line, &self.full[start..end], pad_line_num, severity.color(), pad_start, highlight, pad_end)
+            format!(" {} |\n {} | {}\n {} | \x1B[1;38;5;{}m{}{}{}\x1B[0m", pad_line_num, self.source.line, &self.full[start..end].replace("\t", " "), pad_line_num, severity.color(), pad_start, highlight, pad_end)
         } else {
             format!("[formatting error: {}, {}]", start, end)
         }

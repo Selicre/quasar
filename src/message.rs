@@ -198,6 +198,7 @@ pub mod errors {
         // rom
         rom_unmapped() { "Address does not map to ROM" }
         rom_bank_crossed() { "This statement crosses a bank boundary" }
+        rom_warnpc(addr: u32, warn: u32) { "warnpc fail: {:06X} > {:06X}", addr, warn }
 
         // expr
         expr_fn_arg_count(need: impl Display, have: usize) { "This function expects {} arguments, found {}", need, have }

@@ -1,13 +1,14 @@
 use std::rc::Rc;
 use std::fmt::Display;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use indexmap::IndexSet;
 
 use crate::context::{LineInfo, LocalContext, ContextStr};
 use crate::message::{errors, Message};
 
-use crate::splitter::{self, Block};
+//use crate::splitter::{self, Block};
 use crate::lexer::{self, Token, TokenKind, TokenList};
 use crate::expression::{self, Label, Expression};
 use crate::assembler::{Statement, Assembler};
@@ -18,7 +19,6 @@ use parser::exec_stmt;
 mod parser;
 
 pub struct Target {
-    files: HashMap<Rc<str>, ParsedFile>,
     file_cache: HashMap<String, Vec<u8>>,
     rom_cache: Rom,
     defines: HashMap<String, Vec<Token>>,
@@ -31,12 +31,12 @@ pub struct Target {
     label_ctx: LabelCtx,
     table: HashMap<char, u32>,
     table_stack: Vec<HashMap<char, u32>>,
+    namespace: Vec<String>,
     profiler: std::time::Instant,
 }
 impl Target {
     pub fn new(rom_cache: Rom) -> Self {
         Self {
-            files: HashMap::new(),
             file_cache: HashMap::new(),
             rom_cache,
             defines: HashMap::new(),
@@ -49,6 +49,7 @@ impl Target {
             label_ctx: LabelCtx::default(),
             table: HashMap::new(),
             table_stack: vec![],
+            namespace: vec![],
             profiler: std::time::Instant::now()
         }
     }
@@ -91,6 +92,9 @@ impl Target {
     pub fn defines(&self) -> &HashMap<String, Vec<Token>> { &self.defines }
     pub fn label_id(&mut self, mut label: Label) -> usize {
         label.glue_sub();
+        if self.namespace.len() > 0 {
+            label.glue_namespace(&self.namespace);
+        }
         self.label_idx.insert_full(label).0
     }
     pub fn label_name(&mut self, id: usize) -> Option<&Label> {
@@ -107,8 +111,8 @@ impl Target {
     pub fn function(&mut self, name: &str) -> Option<&(usize, Expression)> {
         self.functions.get(name)
     }
-    pub fn start_macro(&mut self, name: String, args: Vec<String>) {
-        self.cur_macro = Some((name, Macro { args, blocks: vec![] }));
+    pub fn start_macro(&mut self, name: String, args: Vec<String>, path: PathBuf) {
+        self.cur_macro = Some((name, Macro { args, blocks: vec![], path }));
     }
     pub fn finish_macro(&mut self) {
         let m = self.cur_macro.take().unwrap();
@@ -154,8 +158,9 @@ impl Target {
             },
             _ => {}
         }
-        label.glue_sub();
-        let (id, _) = self.label_idx.insert_full(label.clone());
+        //label.glue_sub();
+        //let (id, _) = self.label_idx.insert_full(label.clone());
+        let id = self.label_id(label.clone());
         println!("set label {} to {:?}", id, label);
         id
     }
@@ -184,7 +189,7 @@ impl Target {
         }
     }
 }
-
+/*
 #[derive(Debug, Clone)]
 struct ParsedFile {
     filename: Rc<str>,
@@ -196,7 +201,7 @@ impl ParsedFile {
         let block = self.stmts.get(id)?;
         Some((self.data.slice_local(block.context, self.filename.clone()), block.newline))
     }
-}
+}*/
 
 #[derive(Default)]
 struct LabelCtx {
@@ -227,9 +232,11 @@ impl CondLayer {
 #[derive(Default)]
 struct ExecCtx {
     exec_ptr: usize,
+    next_exec_ptr: usize,
     if_stack: Vec<CondLayer>,
     if_inline: bool,
     rep_count: Option<usize>,
+    path: PathBuf,
 }
 
 impl ExecCtx {
@@ -244,7 +251,7 @@ impl ExecCtx {
     }
     fn run_endif(&mut self) {
         if let CondLayer::WhileTrue(c) = self.current() {
-            self.exec_ptr = c;
+            self.next_exec_ptr = c;
         }
         self.if_stack.pop();
     }
@@ -272,12 +279,10 @@ impl ExecCtx {
     }
 }
 
-pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm: &mut Assembler) {
+pub fn exec_file(filename: &str, source: ContextStr, target: &mut Target, asm: &mut Assembler) {
     let ff = filename.clone();
     target.profiler(&format!("executing {}", ff));
-    let file = if let Some(c) = target.files.get(&filename) {
-        c
-    } else {
+    let file = {
         let file = match std::fs::read(&*filename) {
             Ok(c) => c,
             Err(e) => {
@@ -294,18 +299,21 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
             }
         };
         if !file_str.ends_with("\n") { file_str.push('\n'); }
-        let mut file = ContextStr::new(file_str, LineInfo::file(filename.clone()));
-        let stmts = splitter::split_file(file.clone(), target).into_boxed_slice().into();
-        target.files.entry(filename.clone()).or_insert(ParsedFile {
-            data: file, stmts, filename
-        })
-    }.clone();
-    target.profiler(&format!("split {}", ff));
+        let mut file = ContextStr::new(file_str, LineInfo::file(filename.into()));
+        file
+    };
+    let tokens = lexer::tokenize_stmt(file, target, true);
+    target.profiler(&format!("tokenized {}", ff));
+
+    let mut tokens = TokenList::new(&tokens);
 
     let mut ctx = ExecCtx::default();
-    while let Some((i, newline)) = file.stmt(ctx.exec_ptr) {
-        exec_stmt(i.clone(), newline, target, &mut ctx, &HashMap::new(), asm);
-        ctx.exec_ptr += 1;
+    ctx.path = ff.into();
+    ctx.path.pop();
+    while let Some((i, nl)) = { tokens.seek(ctx.exec_ptr); tokens.split_off(true) } {
+        ctx.next_exec_ptr = tokens.pos();
+        exec_stmt(i.rest().to_vec(), nl, target, &mut ctx, &HashMap::new(), asm);
+        ctx.exec_ptr = ctx.next_exec_ptr;
     }
     target.profiler(&format!("done {}", ff));
 }
@@ -313,17 +321,19 @@ pub fn exec_file(filename: Rc<str>, source: ContextStr, target: &mut Target, asm
 #[derive(Clone)]
 pub struct Macro {
     args: Vec<String>,
-    blocks: Vec<(ContextStr, bool)>
+    blocks: Vec<(Vec<Token>, bool)>,
+    path: PathBuf,
 }
 
 pub fn exec_macro(name: &str, args: Vec<Vec<Token>>, source: ContextStr, target: &mut Target, asm: &mut Assembler) {
     let mut ctx = ExecCtx::default();
     let mac = target.get_macro(name).unwrap().clone();
+    ctx.path = mac.path.clone();
     let args = mac.args.iter().cloned().zip(args.into_iter()).collect::<HashMap<_,_>>();
     target.macro_label_ctx.push((target.macro_invoke, LabelCtx::default()));
     target.macro_invoke += 1;
-    while let Some((i, newline)) = mac.blocks.get(ctx.exec_ptr) {
-        exec_stmt(i.clone(), *newline, target, &mut ctx, &args, asm);
+    while let Some((t, newline)) = mac.blocks.get(ctx.exec_ptr) {
+        exec_stmt(t.clone(), *newline, target, &mut ctx, &args, asm);
         ctx.exec_ptr += 1;
     }
     target.macro_label_ctx.pop();

@@ -1,6 +1,6 @@
 use super::*;
 pub(super) fn exec_stmt(
-    i: ContextStr,
+    mut tokens: Vec<Token>,
     newline: bool,
     target: &mut Target,
     ctx: &mut ExecCtx,
@@ -8,7 +8,7 @@ pub(super) fn exec_stmt(
     asm: &mut Assembler
 ) {
     //println!("executing: {} at {}", i, i.source().short());
-    let mut tokens = lexer::tokenize_stmt(i.clone(), target, target.cur_macro.is_some() || macro_args.len() > 0);
+    //let mut tokens = lexer::tokenize_stmt(i.clone(), target, target.cur_macro.is_some() || macro_args.len() > 0);
 
     if tokens.len() == 0 { return; }
 
@@ -28,7 +28,7 @@ pub(super) fn exec_stmt(
             return;
         }
         let args = if let Some(c) = parse_func_args(&mut tokens, target) { c } else { return; };
-        target.start_macro(name.span.to_string(), args);
+        target.start_macro(name.span.to_string(), args, ctx.path.clone());
         return;
     }
     if let Some((_, c)) = &mut target.cur_macro {
@@ -36,8 +36,15 @@ pub(super) fn exec_stmt(
             target.finish_macro();
             return;
         }
-        c.blocks.push((i, newline));
+        c.blocks.push((tokens, newline));
         return;
+    }
+    let mut expanded = false;
+    if macro_args.len() != 0 {
+        expanded |= expand_macro_args(&mut tokens, macro_args, target);
+        if expanded {
+            glue_tokens(&mut tokens);
+        }
     }
 
     // Parse setting defines as special syntax
@@ -77,9 +84,9 @@ pub(super) fn exec_stmt(
         if let Some(value) = tokens[4].as_string() {
             let ctx = ContextStr::new(value[1..value.len()-1].to_string(), LineInfo::custom(format!("<define at {}>", tokens[4].span.source().short())));
             if tokens.len() > 5 {
-                let mut value = i.clone();
-                value.advance(tokens[5].span.start() - i.start());
-                errors::define_trailing_chars(value).push();
+                //let mut value = i.clone();
+                //value.advance(tokens[5].span.start() - i.start());
+                errors::define_trailing_chars(tokens[5].span.clone()).push();
                 return;
             }
             v = lexer::tokenize_stmt(ctx, target, false);
@@ -89,10 +96,10 @@ pub(super) fn exec_stmt(
 
         let name = def.as_define().unwrap();
         if macro_args.len() != 0 {
-            expand_macro_args(&mut v, macro_args, &i, target);
+            expand_macro_args(&mut v, macro_args, target);
         }
         if exp_defines {
-            let res = expand_defines(&mut v, &i, target);
+            let res = expand_defines(&mut v, &tokens[0].span, target);
             if let Err(e) = res { e.push(); return; }
         }
         if do_math {
@@ -122,13 +129,8 @@ pub(super) fn exec_stmt(
 
         return;
     }
-    let mut expanded = false;
-    if macro_args.len() != 0 {
-        expanded |= expand_macro_args(&mut tokens, macro_args, &i, target);
-        if expanded {
-            glue_tokens(&mut tokens);
-        }
-    }
+    if tokens.len() == 0 { return; }
+    let i = tokens[0].span.clone(); // stopgap measure
     expanded |= match expand_defines(&mut tokens, &i, target) {
         Ok(b) => b,
         Err(e) => if ctx.enabled() {
@@ -141,10 +143,9 @@ pub(super) fn exec_stmt(
 
         let mut tokens = TokenList::new(&tokens);
         // Split statements and process them separately
-        while let Some(part) = tokens.split_off() {
-            exec_cmd(part, false, target, ctx, asm);
+        while let Some((part, nl)) = tokens.split_off(newline) {
+            exec_cmd(part, nl, target, ctx, asm);
         }
-        exec_cmd(tokens, newline, target, ctx, asm);
     } else {
         let tokens = TokenList::new(&tokens);
         exec_cmd(tokens, newline, target, ctx, asm);
@@ -154,7 +155,7 @@ pub(super) fn exec_stmt(
 fn expand_macro_args(
     mut tokens: &mut Vec<Token>,
     macro_args: &HashMap<String, Vec<Token>>,
-    line: &ContextStr, target: &mut Target
+    target: &mut Target
 ) -> bool {
     let mut expanded = false;
     while let Some(c) = tokens.iter().position(|c| c.is_macro_arg()) {
@@ -211,7 +212,8 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
         for i in tokens.rest().iter() {
             print!("{:?} ", i.span);
         }
-        println!(" {:?}", ctx.if_stack);
+        print!(" {:?} ", ctx.if_stack);
+        println!("{}", if newline { "nl" } else { "" });
     }
 
     loop {
@@ -375,6 +377,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 errors::macro_malformed(cmd.span.clone()).push(); return;
             }
             let mut macro_args = vec![vec![]];
+            let mut depth = 0;
             loop {
                 let t = if let Some(t) = tokens.next_non_wsp() {
                     t
@@ -389,10 +392,18 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                         let mut out = lexer::tokenize_stmt(span, target, false);
                         macro_args.last_mut().unwrap().append(&mut out);
                     }
-                } else if t.span.eq(",") {
+                } else if t.span.eq("(") {
+                    depth += 1;
+                    macro_args.last_mut().unwrap().push(t.clone());
+                } else if t.span.eq(",") && depth == 0 {
                     macro_args.push(vec![]);
                 } else if t.span.eq(")") {
-                    break;
+                    if depth != 0 {
+                        depth -= 1;
+                        macro_args.last_mut().unwrap().push(t.clone());
+                    } else {
+                        break;
+                    }
                 } else {
                     macro_args.last_mut().unwrap().push(t.clone());
                 }
@@ -460,7 +471,9 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 errors::cmd_no_arg(cmd.span.clone(), "incsrc", "filename", "\"other.asm\"").push();
                 return;
             };
-            exec_file(c.into(), cmd.span.clone(), target, asm);
+            let mut buf = ctx.path.clone();
+            buf.push(c);
+            exec_file(&buf.to_string_lossy(), cmd.span.clone(), target, asm);
         }
         "db" | "dw" | "dl" | "dd" => {
             let size = match &*cmd.span { "db" => 1, "dw" => 2, "dl" => 3, "dd" => 4, _ => 0 };
@@ -536,7 +549,26 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         "cleartable" => {
             target.table.clear();
         }
+        "pushtable" => {
+            target.table_stack.push(target.table.clone());
+        }
+        "pulltable" => {
+            target.table = target.table_stack.pop().unwrap();
+        }
         "@" => {},
+        "{" | "}" => {},
+        "namespace" => {
+            if let Some(c) = tokens.peek_non_wsp() {
+                // todo: is ident
+                target.namespace.clear();
+                if !c.span.eq("off") {
+                    target.namespace.push(c.span.to_string());
+                }
+            } else {
+                errors::cmd_no_arg(cmd.span.clone(), "namespace", "namespace", "test").push();
+                return;
+            }
+        }
         "prot" => {},
         "autoclean" => {
             // TODO: actually clean shit
@@ -555,19 +587,39 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             }
         }
         "incbin" => {
-            let temp;
+            let mut temp;
             let c = if let Some(c) = tokens.peek_non_wsp() {
                 if c.is_string() {
+                    tokens.next_non_wsp();
                     temp = if let Some(c) = lexer::expand_str(c.span.clone(), target) { c } else { return; };
                     &temp[1..temp.len()-1]
                 } else {
-                    temp = tokens.rest().iter().map(|c| &*c.span).collect::<Vec<_>>().concat();
+                    temp = String::new();
+                    while let Some(t) = tokens.peek() {
+                        if t.span.eq(":") { break; }
+                        tokens.next();
+                        temp.push_str(&t.span);
+                    }
                     temp.trim()
                 }
             } else {
-                ""
+                panic!();
             };
-            let stmt = Statement::binary(std::fs::read(c).unwrap(), cmd.span.clone());
+            let (mut start, mut end) = (0, 0);
+            if let Some(c) = tokens.peek_non_wsp() {
+                if !c.span.eq(":") { panic!("{}", c.span); }
+                tokens.next_non_wsp();
+                // todo: handle exprs here
+                start = usize::from_str_radix(&tokens.next_non_wsp().unwrap().span, 16).unwrap();
+                let dash = tokens.next_non_wsp().unwrap();
+                end = usize::from_str_radix(&tokens.next_non_wsp().unwrap().span, 16).unwrap();
+            }
+            let mut buf = ctx.path.clone();
+            buf.push(c);
+            let file = std::fs::read(buf).unwrap();
+            if end == 0 { end = file.len(); }
+            let file = file[start..end].to_vec();
+            let stmt = Statement::binary(file, cmd.span.clone());
             asm.append(stmt, target);
         }
         "pad" => {
@@ -593,6 +645,19 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 return;
             };
             let stmt = Statement::base(val, cmd.span.clone());
+            asm.append(stmt, target);
+        }
+        "warnpc" => {
+            //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
+            //target.push_msg(Message::info(cmd.span.clone(), 0, c))
+            let next = tokens.peek_non_wsp();
+            if next.is_none() {
+                errors::cmd_no_arg(cmd.span.clone(), "warnpc", "address", "$008123").push();
+                return;
+            }
+
+            let c = Expression::parse(&mut tokens, target);
+            let stmt = Statement::warnpc(c, cmd.span.clone());
             asm.append(stmt, target);
         }
         "print" => {

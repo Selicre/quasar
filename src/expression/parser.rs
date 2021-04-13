@@ -10,7 +10,7 @@ pub fn parse_literal(tokens: &mut TokenList<'_>, target: &mut Target) -> Option<
                 size_hint: match radix {
                     16 => (length+1) / 2,
                     2 => (length+7) / 8,
-                    _ => 0,
+                    _ => if value >= 65536 { 3 } else if value >= 256 { 2 } else { 1 },
                 }
             });
             (t.span.clone(), val)

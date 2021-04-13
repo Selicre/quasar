@@ -39,7 +39,13 @@ impl Token {
         }
     }
     pub fn is_whitespace(&self) -> bool {
-        matches!(self.kind, TokenKind::Whitespace)
+        matches!(self.kind, TokenKind::Whitespace { .. })
+    }
+    pub fn is_non_nl_wsp(&self) -> bool {
+        matches!(self.kind, TokenKind::Whitespace { newline: false })
+    }
+    pub fn is_newline(&self) -> bool {
+        matches!(self.kind, TokenKind::Whitespace { newline: true })
     }
     pub fn is_symbol(&self) -> bool {
         matches!(self.kind, TokenKind::Symbol)
@@ -95,7 +101,7 @@ pub enum TokenKind {
     Char,
     MacroArg,       // <thing>
     Define { escaped: bool }, // !thing or !{thing}
-    Whitespace
+    Whitespace { newline: bool },
 }
 
 pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool) -> Vec<Token> {
@@ -107,6 +113,11 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
 
     let mut out = vec![];
     while let Some(c) = input.chars().next() {
+        if c == ';' {
+            // eat comments
+            input.advance_some(input.find(|c| c == '\n'));
+            continue;
+        }
         if c == '<' {
             let mut peek = input.clone();
             let needle = peek.needle();
@@ -141,6 +152,15 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             } else {
                 num = input.advance_some(input.find(|c| !is_number(c)));
                 radix = 10;
+                // Is this a malformed number?
+                if let Some(c) = input.chars().next() {
+                    if is_ident(c) {
+                        input.advance_some(input.find(|c| !is_ident(c)));
+                        let span = input.prefix_from(needle);
+                        out.push(Token { span, kind: TokenKind::Ident });
+                        continue;
+                    }
+                }
             }
             let mut value = 0i64;
             let mut overflowed = false;
@@ -165,7 +185,21 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             }
         } else if c.is_whitespace() {
             let span = input.advance_some(input.find(|c: char| !c.is_whitespace()));
-            out.push(Token { span, kind: TokenKind::Whitespace });
+            let mut temp = Token {
+                span: ContextStr::empty(),
+                kind: TokenKind::Whitespace { newline: false }
+            };
+            let last = out.last_mut().unwrap_or(&mut temp);
+            if let TokenKind::Whitespace { ref mut newline } = &mut last.kind {
+                // coerce to the newline
+                *newline |= span.contains("\n");
+            } else if last.span.eq(",") {
+                // commas do not act as newlines
+                out.push(Token { span, kind: TokenKind::Whitespace { newline: false }});
+            } else {
+                let newline = span.contains("\n");
+                out.push(Token { span, kind: TokenKind::Whitespace { newline }});
+            }
         } else if c == '"' {
             let needle = input.needle();
             input.advance(1);
@@ -184,7 +218,10 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             let span = input.prefix_from(needle);
             out.push(Token { span, kind: TokenKind::String });
         } else if c == '!' && !input.starts_with("!=") {
-            if let Some((span, escaped)) = parse_define(&mut input, target) {
+            if input.starts_with("!<") {
+                let span = input.advance(1);
+                out.push(Token { span, kind: TokenKind::Define { escaped: false } });
+            } else if let Some((span, escaped)) = parse_define(&mut input, target) {
                 out.push(Token { span, kind: TokenKind::Define { escaped } });
             } else {
                 return out;
@@ -194,12 +231,32 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             if input.skip_if("\\!") { //|| input.skip_if("\\\\") {
                 let span = input.prefix_from(needle);
                 out.push(Token { span, kind: TokenKind::Symbol });
-            } else if input.skip_if("\\\n") {
+            } else if input.skip_if("\\\n") || input.skip_if("\\\r\n") {
                 // do nothing
             } else {
                 let span = input.advance(1);
+                // see if there's a comment on this line
+                let mut peek = input.clone();
+                let wsp = peek.advance_some(peek.find(|c: char| !c.is_whitespace()));
+                if peek.skip_if(";") {
+                    peek.advance_some(peek.find(|c| c == '\n'));
+                    peek.advance(1);
+                    input = peek;
+                } else {
+                    out.push(Token { span, kind: TokenKind::Symbol });
+                }
                 //Message::warning(span.clone(), format!("Stray backslash"));
-                out.push(Token { span, kind: TokenKind::Symbol });
+            }
+        } else if c == ',' {
+            let span = input.advance(1);
+            out.push(Token { span, kind: TokenKind::Symbol });
+            // see if there's a comment on this line
+            let mut peek = input.clone();
+            let wsp = peek.advance_some(peek.find(|c: char| !c.is_whitespace()));
+            if peek.skip_if(";") {
+                peek.advance_some(peek.find(|c| c == '\n'));
+                peek.advance(1);
+                input = peek;
             }
         } else if c == '+' || c == '-' || c == '.' {
             let needle = input.needle();
@@ -358,15 +415,26 @@ impl<'a> TokenList<'a> {
     pub fn last(&self) -> Option<&'a Token> {
         self.inner.last()
     }
-    pub fn split_off(&mut self) -> Option<TokenList<'a>> {
-        self.inner[self.pos..].windows(3)
-            .position(|i| i[0].is_whitespace() && &*i[1].span == ":" && i[2].is_whitespace())
-            .map(|c| {
-                let pos = self.pos;
-                let sp = TokenList { inner: &self.inner[..pos+c], pos };
-                self.pos += c;
-                sp
-            })
+    pub fn pos(&self) -> usize { self.pos }
+    pub fn seek(&mut self, pos: usize) { self.pos = pos; }
+    pub fn split_off(&mut self, newline: bool) -> Option<(TokenList<'a>, bool)> {  // tokens, has newline
+        if self.pos == self.inner.len() { return None; }
+        let c1 = self.inner[self.pos..].windows(3)
+            .position(|i| i[0].is_non_nl_wsp() && &*i[1].span == ":" && i[2].is_non_nl_wsp())
+            .map(|c| (c, c+2, false));
+        let c2 = self.inner[self.pos..].iter().position(|i| i.is_newline()).map(|c| (c,c+1, true));
+        let v = c1.into_iter().chain(c2.into_iter()).min();
+        if let Some((c,e,nl)) = v {
+            let pos = self.pos;
+            let sp = TokenList { inner: &self.inner[..pos+c], pos };
+            self.pos += e;
+            Some((sp, nl))
+        } else {
+            let pos = self.pos;
+            let sp = TokenList { inner: &self.inner[..], pos };
+            self.pos = self.inner.len();
+            Some((sp, newline))
+        }
     }
 }
 

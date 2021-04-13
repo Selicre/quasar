@@ -68,6 +68,43 @@ impl Expression {
     }
 }
 
+impl std::fmt::Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use std::fmt::Write;
+        if self.nodes.len() == 0 {
+            write!(f, "[empty]")?;
+        }
+        let mut first = true;
+        for (span, expr) in self.nodes.iter() {
+            if !std::mem::take(&mut first) { write!(f, " ")?; }
+            write!(f, "{}", expr)?;
+        }
+        Ok(())
+    }
+}
+impl std::fmt::Display for ExprNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use std::fmt::Write;
+        match self {
+            ExprNode::Value(v) => match v {
+                Value::Literal { value, size_hint } => if value.fract() < 1e-6 {
+                    write!(f, "${:X}", *value as i64)
+                } else {
+                    write!(f, "{}", value)
+                },
+                Value::Label(i) => write!(f, "%{}", i),
+                Value::String(i) => write!(f, "{:?}", i),
+            },
+            ExprNode::Binop(c) => write!(f, "{:?}", c),
+            ExprNode::Unop(c) => write!(f, "{:?}", c),
+            ExprNode::FuncArg(c) => write!(f, "funcarg {}", c),
+            ExprNode::Call(c,s) => write!(f, "{}({})", s, c),
+            ExprNode::Empty => write!(f, "empty")
+        }?;
+        Ok(())
+    }
+}
+
 pub fn int_cast(val: f64) -> u32 {
     if val >= 0.0 {
         if val > u32::MAX as f64 {
@@ -128,6 +165,13 @@ impl Label {
     pub fn glue_sub(&mut self) {
         if let Label::Named { ref mut stack, .. } = self {
             *stack = vec![stack.join("_")];
+        }
+    }
+    pub fn glue_namespace(&mut self, namespace: &[String]) {
+        if let Label::Named { ref mut stack, .. } = self {
+            let mut n = namespace.to_vec();
+            n.push(stack.pop().unwrap());
+            *stack = vec![n.join("_")];
         }
     }
     pub fn no_colon(&self) -> bool {

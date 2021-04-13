@@ -65,16 +65,36 @@ pub fn write_rat(rom: &mut Rom, offset: usize, len: usize, span: &ContextStr) {
     use bytes::BufMut;
     let mut data = vec![];
     data.put(&b"STAR"[..]);
-    data.put_u16(len as u16);
-    data.put_u16(!(len as u16));
+    data.put_u16_le(len as u16);
+    data.put_u16_le(!(len as u16));
     rom.write_at_raw(offset as _, &data);
 }
 
 pub fn resolve_freespace(rom: &mut Rom, asm: &mut Assembler) {
     let mut fsp = parse_freespace(rom);
-    for i in asm.segments_mut() {
+    'outer: for i in asm.segments_mut() {
         match i.start {
             StartKind::Freecode | StartKind::Freedata => {
+                for (idx, c) in fsp.free.iter().enumerate() {
+                    let [mut start, end] = c;
+                    if end - start <= i.offset + 8 { continue; }
+                    // does it fit without bankcrossing?
+                    let bank_border = (start & !0x7FFF) + 0x8000;
+                    println!("{:06X} {:06X} {:06X} {:06X}", start, end, start + i.offset + 8, bank_border);
+                    if start + i.offset + 8 >= bank_border {
+                        if *end < bank_border { continue; }
+                        start = bank_border;
+                        if end - start <= i.offset + 8 { continue; }
+                        println!("corr: {:06X} {:06X} {:06X} {:06X}", start, end, start + i.offset + 8, bank_border);
+                    }
+                    let offset = start;
+                    fsp.free[idx][0] = start + i.offset + 8;
+                    write_rat(rom, offset, i.offset, &i.span);
+                    fsp.rats.push([offset, offset+i.offset+8]);
+                    let addr = rom.mapper().map_to_addr(offset+8) | 0x800000;
+                    i.start = StartKind::Expression(crate::expression::Expression::value(i.span.clone(), addr as f64));
+                    continue 'outer;
+                }/*
                 if let Some(fsp_id) = fsp.free.iter().position(|c| c[1] - c[0] > i.offset + 8) {
                     println!("using freespace {:X?} len {:X}", fsp.free[fsp_id], i.offset);
                     // TODO: figure out bankcross
@@ -86,7 +106,7 @@ pub fn resolve_freespace(rom: &mut Rom, asm: &mut Assembler) {
                     i.start = StartKind::Expression(crate::expression::Expression::value(i.span.clone(), addr as f64));
                 } else {
                     panic!("no freespace in rom");
-                }
+                }*/
             },
             _ => {}
         }

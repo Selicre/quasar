@@ -1,6 +1,6 @@
 #![deny(unused_must_use)]
 
-mod splitter;
+//mod splitter;
 mod context;
 mod message;
 mod executor;
@@ -32,7 +32,7 @@ fn main() {
     let mut asm = Assembler::new();
     //asm.set_compare(compare);
 
-    executor::exec_file(asm_file.into(), ContextStr::cli(), &mut target, &mut asm);
+    executor::exec_file(&asm_file, ContextStr::cli(), &mut target, &mut asm);
     MsgQueue::drain(|i| {
         println!("{}", i);
     });

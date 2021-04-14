@@ -210,7 +210,7 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
 
 
 pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
-    if true {
+    if false {
         print!("{} ", if ctx.enabled() { "+" } else { " " });
         for i in tokens.rest().iter() {
             print!("{:?} ", i.span);
@@ -312,14 +312,14 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
     }
 
     // test mnemonic
-    /*let is_mnemonic = <_ as std::convert::TryFrom<_>>::try_from(cmd.span.as_bytes())
-        .map_or(false, |c: [u8;3]| crate::instruction::MNEMONICS.contains(&c));
+    let is_mnemonic = <_ as std::convert::TryFrom<_>>::try_from(cmd.span.as_bytes())
+        .map_or(false, |mut c: [u8;3]| { c.make_ascii_lowercase(); crate::instruction::MNEMONICS.contains(&c) });
     if is_mnemonic {
         if let Some(stmt) = crate::instruction::parse(cmd, &mut tokens, target) {
             asm.append(stmt, target);
         }
         return;
-    }*/
+    }
 
     match &*cmd.span.to_ascii_lowercase() {
         "if" => {
@@ -647,11 +647,18 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             let stmt = Statement::binary(file, cmd.span.clone());
             asm.append(stmt, target);
         }
-        "padbyte" => {},    // TODO
+        "padbyte" => {
+            if tokens.peek_non_wsp().is_none() {
+                errors::cmd_no_arg(cmd.span.clone(), "padbyte", "padding byte", "$EA").push();
+                return;
+            }
+            let expr = Expression::parse(&mut tokens, target);
+            target.pad_byte = expr.eval_const(target) as u32 as u8;
+        }
         "pad" => {
             let val = if let Some(c) = tokens.peek_non_wsp() {
                 let c = Expression::parse(&mut tokens, target);
-                asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+                asm.new_segment_padded(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target.pad_byte, target);
             } else {
                 errors::cmd_no_arg(cmd.span.clone(), "pad", "address", "$008123").push();
                 return;

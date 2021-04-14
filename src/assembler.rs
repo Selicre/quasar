@@ -17,6 +17,7 @@ pub struct Segment {
     pub start: StartKind,
     pub label_id: usize,
     pub offset: usize,
+    pub pad_byte: Option<u8>,
     pub base_offset: Option<usize>,
     pub span: ContextStr,
     pub stmts: Vec<Statement>
@@ -25,7 +26,7 @@ pub struct Segment {
 impl Segment {
     pub fn new(span: ContextStr, label_id: usize, start: StartKind) -> Self {
         Segment {
-            start, label_id, offset: 0, base_offset: None, span, stmts: vec![],
+            start, label_id, offset: 0, pad_byte: None, base_offset: None, span, stmts: vec![],
         }
     }
     pub fn push(&mut self, mut stmt: Statement) -> &Statement {
@@ -84,6 +85,13 @@ impl Assembler {
         //println!("new segment: {}", label_id);
         self.segments.push(Segment::new(span, label_id, s));
     }
+    pub fn new_segment_padded(&mut self, span: ContextStr, s: StartKind, pad: u8, target: &mut Target) {
+        let label_id = target.segment_label(self.segments.len());
+        //println!("new segment: {}", label_id);
+        let mut seg = Segment::new(span, label_id, s);
+        seg.pad_byte = Some(pad);
+        self.segments.push(seg);
+    }
     pub fn resolve_labels(&mut self) {
         for s in self.segments.iter() {
             match s.start {
@@ -132,27 +140,30 @@ impl Assembler {
         }
     }
     pub fn write_to_rom(&self, target: &mut Target, rom: &mut Rom) -> Option<()> {
+        let mut last_addr = 0x8000;
         for i in self.segments.iter() {
             let addr = match &i.start {
                 StartKind::Expression(e) => e.try_eval_int(target, self)? as u32,
                 _ => panic!("internal error: freespace pointer not resolved yet")
             };
-            /*
-            // TODO: this needs to be abstracted into a mapper
-            if  (addr&0xFE0000)==0x7E0000        //wram
-            ||  (addr&0x408000)==0x000000        //hardware regs, ram mirrors, other strange junk
-            ||  (addr&0x708000)==0x700000 {      //sram (low parts of banks 70-7D)
-                target.push_error(i.span.clone(), 0, "Attempt to seek to unmapped area".into());
-                return None;
+            if let Some(c) = i.pad_byte {
+                let d1 = rom.mapper().map_to_file(addr as _).unwrap();
+                let d2 = rom.mapper().map_to_file(last_addr as _).unwrap();
+                let dist = d1 - d2;
+                if (d1-1)>>15 == d2>>15 {
+                    let mut padding = vec![c; dist as usize];
+                    rom.write_at(last_addr, &padding[..], &i.span);
+                } else {
+                    println!("uh oh {:06X} {:06X} {:X} {:X}", d1, d2, (d1-1)>>15, d2>>15);
+                    crate::message::errors::rom_bank_crossed(i.span.clone()).push();
+                }
             }
-            let offset = ((addr&0x7F0000)>>1|(addr&0x7FFF));
-
-            w.seek(SeekFrom::Start(offset));*/
             let mut ch = 0;
             for s in i.stmts.iter() {
                 if ch != s.offset { println!("uh oh wrong offset: {} != {}", ch, s.offset); }
                 ch += s.size;
                 //w.seek(SeekFrom::Start(offset + s.offset as u64));
+                last_addr = label_offset(addr, s.offset as u32 + s.size as u32);
                 let addr = label_offset(addr, s.offset as u32);
                 match &s.kind {
                     StatementKind::Print { expr } => {
@@ -219,7 +230,7 @@ impl Assembler {
                     }
                     _ => {}
                 }
-                if true {
+                if false {
                     if let Some(off) = rom.mapper().map_to_file(addr as _) {
                         if off >= rom.as_slice().len() { continue; }
                         let written = &rom.as_slice()[off..][..s.size.min(16)];

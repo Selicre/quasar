@@ -59,6 +59,7 @@ fn main() {
         println!("Assembly failed");
         return;
     }
+    rom.fix_checksum();
     std::fs::write("out.sfc", rom.as_slice()).unwrap();
     target.profiler("finished");
     // this actually takes a surprisingly long time

@@ -35,6 +35,7 @@ pub struct Target {
     table_stack: Vec<HashMap<char, u32>>,
     pc_stack: Vec<usize>,
     namespace: Vec<String>,
+    pad_byte: u8,
     profiler: std::time::Instant,
 }
 impl Target {
@@ -55,6 +56,7 @@ impl Target {
             table_stack: vec![],
             pc_stack: vec![],
             namespace: vec![],
+            pad_byte: 0,
             profiler: std::time::Instant::now()
         }
     }

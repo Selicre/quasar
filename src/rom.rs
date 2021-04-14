@@ -114,4 +114,15 @@ impl Rom {
             &[]
         }
     }
+    pub fn fix_checksum(&mut self) {
+        let src = ContextStr::empty();
+        self.write_at(0xFFDC, b"\xFF\xFF\0\0", &src);
+        let cksum = self.checksum();
+        self.write_at(0xFFDE, &cksum.to_le_bytes(), &src);
+        self.write_at(0xFFDC, &(!cksum).to_le_bytes(), &src);
+    }
+    pub fn checksum(&self) -> u16 {
+        // TODO: npo2 roms
+        self.buf.iter().map(|c| *c as u16).sum()
+    }
 }

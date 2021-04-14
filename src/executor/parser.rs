@@ -11,7 +11,6 @@ pub(super) fn exec_stmt(
 ) {
     //println!("executing: {} at {}", i, i.source().short());
     //let mut tokens = lexer::tokenize_stmt(i.clone(), target, target.cur_macro.is_some() || macro_args.len() > 0);
-
     if tokens.len() == 0 { return; }
 
     let mut tokens = Cow::from(tokens);
@@ -211,7 +210,7 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
 
 
 pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: &mut ExecCtx, asm: &mut Assembler) {
-    if false {
+    if true {
         print!("{} ", if ctx.enabled() { "+" } else { " " });
         for i in tokens.rest().iter() {
             print!("{:?} ", i.span);
@@ -311,6 +310,17 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         asm.set_label(id, expr, cmd.span.clone(), target);
         return;
     }
+
+    // test mnemonic
+    /*let is_mnemonic = <_ as std::convert::TryFrom<_>>::try_from(cmd.span.as_bytes())
+        .map_or(false, |c: [u8;3]| crate::instruction::MNEMONICS.contains(&c));
+    if is_mnemonic {
+        if let Some(stmt) = crate::instruction::parse(cmd, &mut tokens, target) {
+            asm.append(stmt, target);
+        }
+        return;
+    }*/
+
     match &*cmd.span.to_ascii_lowercase() {
         "if" => {
             if let Some(_) = tokens.peek_non_wsp() {
@@ -524,6 +534,17 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         "lorom" => {},
         "bank" => {},
         "math" => {},
+        "pushpc" => {
+            let label_idx = target.phantom_label();
+            target.pc_stack.push(label_idx);
+            let stmt = Statement::label(label_idx, cmd.span.clone());
+            asm.append(stmt, target);
+        },
+        "pullpc" => {
+            let label = target.pc_stack.pop().unwrap();
+            let c = Expression::label(cmd.span.clone(), label);
+            asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
+        }
         "table" => {
             // TODO: handle ,ltr/,rtl
             let temp;
@@ -657,7 +678,8 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             let value = tokens.next_non_wsp().unwrap();
             let stmt = Statement::bankcross(value.span.eq("off"), cmd.span.clone());
             asm.append(stmt, target);
-        },  // TODO
+        },
+        "reset" => {},  // TODO
         "warnpc" => {
             //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
             //target.push_msg(Message::info(cmd.span.clone(), 0, c))
@@ -666,9 +688,24 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                 errors::cmd_no_arg(cmd.span.clone(), "warnpc", "address", "$008123").push();
                 return;
             }
-
             let c = Expression::parse(&mut tokens, target);
             let stmt = Statement::warnpc(c, cmd.span.clone());
+            asm.append(stmt, target);
+        },
+        "assert" => {
+            let next = tokens.peek_non_wsp();
+            if next.is_none() {
+                errors::cmd_no_arg(cmd.span.clone(), "assert", "condition", "2 + 2 == 4").push();
+                return;
+            }
+            let c = Expression::parse(&mut tokens, target);
+            tokens.next_non_wsp();  // skip comma
+            let msg = if let Some(s) = tokens.peek_non_wsp() {
+                Expression::parse(&mut tokens, target)
+            } else {
+                Expression::string(cmd.span.clone(), "Assertion failed")
+            };
+            let stmt = Statement::assert(c, msg, cmd.span.clone());
             asm.append(stmt, target);
         }
         "print" => {
@@ -710,7 +747,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             if let Some(stmt) = crate::instruction::parse(cmd, &mut tokens, target) {
                 asm.append(stmt, target);
             } else {
-                target.push_error(cmd.span.clone(), 0, "Unsupported addressing mode for instruction".into());
+                errors::cmd_unknown(cmd.span.clone()).push();
             }
         }
         c => {

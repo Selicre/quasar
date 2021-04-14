@@ -11,17 +11,27 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     let mut map = HashMap::new();
-    populate(&mut map);
+    let mut mnemonics = HashSet::new();
+    populate(&mut map, &mut mnemonics);
+
+    mnemonics.remove(b"rep");    // grumble
 
     let mut map2 = phf_codegen::Map::new();
-
     for (k,v) in map {
         map2.entry(k,&format!("{}", v));
     }
 
+    let mut mnemonics2 = phf_codegen::Set::new();
+    for v in mnemonics {
+        mnemonics2.entry(v);
+    }
     writeln!(&mut file,
         "pub static OPCODES: phf::Map<[u8;4], u8> = \n{};\n",
         map2.build()
+    ).unwrap();
+    writeln!(&mut file,
+        "pub static MNEMONICS: phf::Set<[u8;3]> = \n{};\n",
+        mnemonics2.build()
     ).unwrap();
 }
 
@@ -50,7 +60,7 @@ enum AddressingMode {
     RelativeWord,
     BlockMove
 }
-fn populate(map: &mut HashMap<[u8;4], u8>) {
+fn populate(map: &mut HashMap<[u8;4], u8>, mnemonics: &mut HashSet<[u8;3]>) {
     use AddressingMode::*;
 
     macro_rules! kinds {
@@ -58,6 +68,7 @@ fn populate(map: &mut HashMap<[u8;4], u8>) {
             let [a,b,c] = *$val;
             $(
                 map.insert([a,b,c,$addr as u8], $offset);
+                mnemonics.insert([a,b,c]);
             )*
         }}
     }

@@ -35,6 +35,12 @@ impl Expression {
     pub fn value(span: ContextStr, value: f64) -> Self {
         Self { nodes: vec![(span, ExprNode::Value(Value::Literal { value, size_hint: 0 }))] }
     }
+    pub fn label(span: ContextStr, value: usize) -> Self {
+        Self { nodes: vec![(span, ExprNode::Value(Value::Label(value)))] }
+    }
+    pub fn is_label(&self, value: usize) -> bool {
+        self.nodes.len() == 1 && matches!(self.nodes[0].1, ExprNode::Value(Value::Label(val)) if val == value)
+    }
     pub fn string(span: ContextStr, value: impl Into<String>) -> Self {
         Self { nodes: vec![(span, ExprNode::Value(Value::String(value.into())))] }
     }
@@ -159,7 +165,8 @@ pub enum Label {
     Named { stack: Vec<String>, invoke: Option<usize> },
     AnonPos { depth: usize, pos: usize, invoke: Option<usize> },
     AnonNeg { depth: usize, pos: usize, invoke: Option<usize> },
-    Segment(usize)
+    Segment(usize),
+    Phantom(usize),
 }
 impl Label {
     pub fn glue_sub(&mut self) {

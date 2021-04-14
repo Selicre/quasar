@@ -199,9 +199,13 @@ pub mod errors {
         rom_unmapped() { "Address does not map to ROM" }
         rom_bank_crossed() { "This statement crosses a bank boundary" }
         rom_warnpc(addr: u32, warn: u32) { "warnpc fail: {:06X} > {:06X}", addr, warn }
+        rom_assert(msg: &str) { "{}", msg }
 
         // expr
         expr_fn_arg_count(need: impl Display, have: usize) { "This function expects {} arguments, found {}", need, have }
         expr_read_file_oob() { "File read out of bounds" }
+
+        // instructions
+        instr_rel_oob(val: i32) { "Relative instruction out of range ({} bytes, range: -128..127)", val } { "reduce the code size between the label and the branch instruction" }
     }
 }

@@ -338,16 +338,19 @@ pub fn parse(instr: &Token, tokens: &mut TokenList<'_>, target: &mut Target) -> 
         }
     }
 
-    if size.is_none() {
+    if size.is_none() && !expr.contains_label() {
         size = expr.size_hint();
     }
 
-    if size.is_none() && matches!(arg, ArgumentKind::Immediate) {
-        if expr.contains_label() {
-            size = Some(2);
-        } else {
-            size = Some(1);
+    if matches!(arg, ArgumentKind::Immediate) {
+        if size.is_none() {
+            if expr.contains_label() {
+                size = Some(2);
+            } else {
+                size = Some(1);
+            }
         }
+        if size == Some(3) { size = Some(2); }
     }
 
     if let Some(opcode) = try_opcode(instr.span.as_bytes(), AddressingMode::Relative) {

@@ -30,8 +30,10 @@ pub struct Target {
     functions: HashMap<String, (usize, Expression)>,
     label_idx: IndexSet<Label>,
     label_ctx: LabelCtx,
+    phantom_label_idx: usize,
     table: HashMap<char, u32>,
     table_stack: Vec<HashMap<char, u32>>,
+    pc_stack: Vec<usize>,
     namespace: Vec<String>,
     profiler: std::time::Instant,
 }
@@ -48,8 +50,10 @@ impl Target {
             cur_macro: None,
             label_idx: IndexSet::new(),
             label_ctx: LabelCtx::default(),
+            phantom_label_idx: 0,
             table: HashMap::new(),
             table_stack: vec![],
+            pc_stack: vec![],
             namespace: vec![],
             profiler: std::time::Instant::now()
         }
@@ -103,6 +107,11 @@ impl Target {
     }
     pub fn segment_label(&mut self, seg: usize) -> usize {
         let (id, _) = self.label_idx.insert_full(Label::Segment(seg));
+        id
+    }
+    pub fn phantom_label(&mut self) -> usize {
+        let (id, _) = self.label_idx.insert_full(Label::Phantom(self.phantom_label_idx));
+        self.phantom_label_idx += 1;
         id
     }
     pub fn add_function(&mut self, name: String, arity: usize, expr: Expression) {

@@ -427,7 +427,7 @@ impl<'a> TokenList<'a> {
         let c2 = self.inner[self.pos..].iter().position(|i| i.is_newline()).map(|c| (c,c+1, true));
         let v = c1.into_iter().chain(c2.into_iter()).min();
         */
-        let v = self.inner[self.pos..].windows(3).enumerate().find_map(|(c,i)| {
+        let mut v = self.inner[self.pos..].windows(3).enumerate().find_map(|(c,i)| {
             if i[0].is_newline() {
                 Some((c, c+1, true))
             } else if i[0].is_non_nl_wsp() && &*i[1].span == ":" && i[2].is_non_nl_wsp() {
@@ -436,6 +436,16 @@ impl<'a> TokenList<'a> {
                 None
             }
         });
+        let l = self.inner.len();
+        if l > 2 && v.is_none() {
+            if self.inner[l-2].is_newline() {
+                let c = l-2-self.pos;
+                v = Some((c, c+1, true))
+            } else if self.inner[l-1].is_newline() {
+                let c = l-1-self.pos;
+                v = Some((c, c+1, true))
+            }
+        }
         if let Some((c,e,nl)) = v {
             let pos = self.pos;
             let sp = TokenList { inner: &self.inner[..pos+c], pos };

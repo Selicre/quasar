@@ -73,6 +73,9 @@ impl Assembler {
     pub fn segments_mut(&mut self) -> &mut [Segment] {
         &mut self.segments
     }
+    pub fn segments(&self) -> &[Segment] {
+        &self.segments
+    }
     pub fn set_compare(&mut self, v: Vec<u8>) {
         self.compare = v;
     }
@@ -156,11 +159,6 @@ impl Assembler {
                         let val = if let Some(c) = expr.try_eval(false, target, self) { c } else { continue; };
                         println!("{:?}", val.1);
                     },
-                    StatementKind::DataStr { data, size } => {
-                        if *size == 1 {
-                            rom.write_at(addr, data.as_bytes(), &s.span)?;
-                        }
-                    },
                     StatementKind::Data { expr } => {
                         let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
                         let val = val.to_le_bytes();
@@ -168,14 +166,19 @@ impl Assembler {
                     },
                     StatementKind::InstructionRel { opcode, expr } => {
                         rom.write_at(addr, &[*opcode], &s.span)?;
-                        let mut val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
+                        let mut val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; } as i32;
                         //println!("rel val: {:06X} - {:06X}", val, addr + s.size as u32);
                         if expr.contains_label() {
                             // actually make relative
                             if let Some(base) = s.base {
-                                val = val.wrapping_sub(base as u32 + s.offset as u32);
+                                val = val.wrapping_sub(base as i32 + s.offset as i32);
                             } else {
-                                val = val.wrapping_sub(addr as u32 + s.size as u32);
+                                val = val.wrapping_sub(addr as i32 + s.size as i32);
+                            }
+                        }
+                        if s.size == 2 {
+                            if val < -128 || val > 127 {
+                                crate::message::errors::instr_rel_oob(s.span.clone(), val).push();
                             }
                         }
                         let val = val.to_le_bytes();
@@ -202,7 +205,13 @@ impl Assembler {
                         let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
                         if addr > val {
                             crate::message::errors::rom_warnpc(s.span.clone(), addr, val).push();
-                            continue;
+                        }
+                    }
+                    StatementKind::Assert { expr, msg } => {
+                        let val = if let Some(c) = expr.try_eval_float(target, self) { c } else { continue; };
+                        if val == 0.0 {
+                            let msg = msg.try_eval(false, target, self);
+                            crate::message::errors::rom_assert(s.span.clone(), &format!("{:?}", msg)).push();
                         }
                     }
                     StatementKind::Bankcross(n) => {
@@ -210,13 +219,13 @@ impl Assembler {
                     }
                     _ => {}
                 }
-                /*
-                if let Some(off) = rom.mapper().map_to_file(addr as _) {
-                    if off >= rom.as_slice().len() { continue; }
-                    let written = &rom.as_slice()[off..][..s.size.min(16)];
-                    println!("{:06X} {} -> {:02X?} [{}]", addr, s, written, (&*s.span.full_line()).trim());
+                if true {
+                    if let Some(off) = rom.mapper().map_to_file(addr as _) {
+                        if off >= rom.as_slice().len() { continue; }
+                        let written = &rom.as_slice()[off..][..s.size.min(16)];
+                        println!("{:06X} {} -> {:02X?} [{}]", addr, s, written, (&*s.span.full_line()).trim());
+                    }
                 }
-                */
                 /*if self.compare.len() > 0 {
                     let lhs = &written[..];
                     let rhs = &self.compare[s.offset..s.offset+s.size];
@@ -254,10 +263,6 @@ pub enum StatementKind {
     Data {
         expr: Expression
     },
-    DataStr {
-        data: String,
-        size: usize,
-    },
     Instruction {
         opcode: u8,
         expr: Expression
@@ -270,10 +275,6 @@ pub enum StatementKind {
         opcode: u8
     },
     Label(usize),
-    LabelExpr {
-        id: usize,
-        expr: Expression
-    },
     Print {
         expr: Expression
     },
@@ -286,6 +287,10 @@ pub enum StatementKind {
     },
     WarnPc {
         expr: Expression
+    },
+    Assert {
+        expr: Expression,
+        msg: Expression,
     },
     Bankcross(bool),
 }
@@ -301,10 +306,6 @@ impl Statement {
     }
     pub fn data(expr: Expression, size: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::Data { expr }, size, span)
-    }
-    pub fn data_str(data: String, size: usize, span: ContextStr) -> Self {
-        let l = size * data.len();
-        Statement::new(StatementKind::DataStr { data, size }, l, span)
     }
     pub fn label(data: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::Label(data), 0, span)
@@ -331,6 +332,9 @@ impl Statement {
     pub fn warnpc(expr: Expression, span: ContextStr) -> Self {
         Statement::new(StatementKind::WarnPc { expr }, 0, span)
     }
+    pub fn assert(expr: Expression, msg: Expression, span: ContextStr) -> Self {
+        Statement::new(StatementKind::Assert { expr, msg }, 0, span)
+    }
     pub fn bankcross(value: bool, span: ContextStr) -> Self {
         Statement::new(StatementKind::Bankcross(value), 0, span)
     }
@@ -348,6 +352,13 @@ impl std::fmt::Display for Statement {
             StatementKind::Print { expr } => write!(f, "print {}", expr),
             StatementKind::Instruction { opcode, expr } => {
                 write!(f, "instr ${:02X}", opcode)?;
+                if !expr.is_empty() {
+                    write!(f, ": {}", expr)?;
+                }
+                Ok(())
+            },
+            StatementKind::InstructionRel { opcode, expr } => {
+                write!(f, "insrl ${:02X}", opcode)?;
                 if !expr.is_empty() {
                     write!(f, ": {}", expr)?;
                 }

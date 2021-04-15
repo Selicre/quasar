@@ -170,6 +170,22 @@ impl Expression {
                             let value = value.map_err(|c| c.push()).ok()?;
                             StackValue::Number { value, origin: None }
                         },
+                        "canreadfile1" | "canreadfile2" | "canreadfile3" | "canreadfile4" => {
+                            // this sucks. please sort it out later
+                            let c = name.chars().last().unwrap().to_digit(10).unwrap() as usize;
+                            match len {
+                                2 => {},
+                                _ => {
+                                    errors::expr_fn_arg_count(span.clone(), "2", *len).push();
+                                    return None;
+                                }
+                            };
+                            let (offset, file) = (get_val(stack, target), get_string(stack, target));
+                            let offset = offset as usize;
+                            let value = target.read_file_n(&span, &file, offset, c).is_ok();
+                            let value = if value { 1.0 } else { 0.0 };
+                            StackValue::Number { value, origin: None }
+                        },
                         "readfile1" | "readfile2" | "readfile3" | "readfile4" => {
                             // this sucks. please sort it out later
                             let c = name.chars().last().unwrap().to_digit(10).unwrap() as usize;

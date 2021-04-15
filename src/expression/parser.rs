@@ -33,7 +33,7 @@ pub fn parse_literal(tokens: &mut TokenList<'_>, target: &mut Target) -> Option<
 
 pub fn parse_ident(tokens: &mut TokenList<'_>, has_macro: bool, target: &mut Target) -> Option<Node> {
     parse_label(tokens, has_macro, target).map(|(s,t)| {
-        (s,ExprNode::Value(Value::Label(target.label_id(t))))
+        (s,ExprNode::Value(Value::Label(target.label_id(t, false))))
     })
 }
 pub fn parse_label(tokens: &mut TokenList<'_>, has_macro: bool, target: &mut Target) -> Option<(ContextStr, Label)> {

@@ -6,7 +6,6 @@ pub(super) fn exec_stmt(
     newline: bool,
     target: &mut Target,
     ctx: &mut ExecCtx,
-    macro_args: &HashMap<String, Vec<Token>>,
     asm: &mut Assembler
 ) {
     //println!("executing: {} at {}", i, i.source().short());
@@ -43,11 +42,9 @@ pub(super) fn exec_stmt(
         return;
     }
     let mut expanded = false;
-    if macro_args.len() != 0 {
-        expanded |= expand_macro_args(tokens.to_mut(), macro_args, target);
-        if expanded {
-            glue_tokens(tokens.to_mut());
-        }
+    expanded |= expand_macro_args(tokens.to_mut(), target);
+    if expanded {
+        glue_tokens(tokens.to_mut());
     }
 
     // Parse setting defines as special syntax
@@ -98,9 +95,7 @@ pub(super) fn exec_stmt(
         }
 
         let name = def.as_define().unwrap();
-        if macro_args.len() != 0 {
-            expand_macro_args(v.to_mut(), macro_args, target);
-        }
+        expand_macro_args(v.to_mut(), target);
         if exp_defines {
             let res = expand_defines(&mut v, &tokens[0].span, target);
             if let Err(e) = res { e.push(); return; }
@@ -157,13 +152,13 @@ pub(super) fn exec_stmt(
 
 fn expand_macro_args(
     mut tokens: &mut Vec<Token>,
-    macro_args: &HashMap<String, Vec<Token>>,
     target: &mut Target
 ) -> bool {
     let mut expanded = false;
+    if target.cur_macro_args.len() == 0 { return false; }
     while let Some(c) = tokens.iter().position(|c| c.is_macro_arg()) {
         let def = tokens[c].as_macro_arg().unwrap();
-        if let Some(value) = macro_args.get(&*def) {
+        if let Some(value) = target.cur_macro_args.get(&*def) {
             expanded = true;
             let mut value = value.clone();
             value.iter_mut().for_each(|c| c.span.set_parent(def.clone()));
@@ -222,11 +217,18 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
     loop {
         let mut peek = tokens.clone();
         let mut unstructured = false;
+        let mut global = false;
         // Parse labels
-        if let Some(c) = peek.peek_non_wsp() {
-            if c.span.eq("#") {
+        while let Some(c) = peek.peek_non_wsp() {
+            if c.span.eq("global") {
+                peek.next_non_wsp();
+                global = true;
+            } else if c.span.eq("#") {
                 peek.next_non_wsp();
                 unstructured = true;
+                break;
+            } else {
+                break;
             }
         }
         if let Some(c) = expression::parse_label(&mut peek, false, target) {
@@ -236,9 +238,9 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
                 tokens = peek;
                 if ctx.enabled() {
                     let id = if unstructured {
-                        target.label_id(c.1)
+                        target.label_id(c.1, global)
                     } else {
-                        target.set_label(c.1, c.0.clone())
+                        target.set_label(c.1, global, c.0.clone())
                     };
                     asm.append(Statement::label(id, c.0), target);
                 }
@@ -316,7 +318,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
 
     if matches!(tokens.peek_non_wsp(), Some(c) if &*c.span == "=") {
         tokens.next_non_wsp();
-        let id = target.label_id(Label::Named { stack: vec![cmd.span.to_string()], invoke: None });
+        let id = target.label_id(Label::Named { stack: vec![cmd.span.to_string()], invoke: None }, false);
         let expr = Expression::parse(&mut tokens, target);
         asm.set_label(id, expr, cmd.span.clone(), target);
         return;
@@ -401,39 +403,46 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             if !tokens.next_non_wsp().unwrap().span.eq("(") {
                 errors::macro_malformed(cmd.span.clone()).push(); return;
             }
-            let mut macro_args = vec![vec![]];
+            let mut first = true;
+            let mut call_args = vec![vec![]];
             let mut depth = 0;
             loop {
-                let t = if let Some(t) = tokens.next_non_wsp() {
+                let t = if std::mem::take(&mut first) {
+                    tokens.next_non_wsp()
+                } else {
+                    tokens.next()
+                };
+                let t = if let Some(t) = t {
                     t
                 } else {
                     errors::macro_malformed(cmd.span.clone()).push(); return;
                 };
                 if t.is_string() {
-                    if macro_args.last_mut().unwrap().len() == 0 {
+                    if call_args.last_mut().unwrap().len() == 0 {
                         // TODO: expand macro args too
                         let l = if let Some(c) = lexer::expand_str(t.span.clone(), target) { c } else { return; };
                         let span = ContextStr::new(lexer::display_str(&l), LineInfo::custom(format!("<string at {}>", t.span.source().short())));
                         let mut out = lexer::tokenize_stmt(span, target, false);
-                        macro_args.last_mut().unwrap().append(&mut out);
+                        call_args.last_mut().unwrap().append(&mut out);
                     }
                 } else if t.span.eq("(") {
                     depth += 1;
-                    macro_args.last_mut().unwrap().push(t.clone());
+                    call_args.last_mut().unwrap().push(t.clone());
                 } else if t.span.eq(",") && depth == 0 {
-                    macro_args.push(vec![]);
+                    first = true;
+                    call_args.push(vec![]);
                 } else if t.span.eq(")") {
                     if depth != 0 {
                         depth -= 1;
-                        macro_args.last_mut().unwrap().push(t.clone());
+                        call_args.last_mut().unwrap().push(t.clone());
                     } else {
                         break;
                     }
                 } else {
-                    macro_args.last_mut().unwrap().push(t.clone());
+                    call_args.last_mut().unwrap().push(t.clone());
                 }
             }
-            exec_macro(&name.span, macro_args, cmd.span.clone(), target, asm);
+            exec_macro(&name.span, call_args, cmd.span.clone(), target, asm);
         }
         "function" => {
             let name = if let Some(n) = tokens.next_non_wsp() { n } else {
@@ -545,6 +554,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         "lorom" => {},
         "bank" => {},
         "math" => {},
+        "warnings" => {},
         "pushpc" => {
             let label_idx = target.phantom_label();
             target.pc_stack.push(label_idx);

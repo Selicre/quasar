@@ -27,6 +27,7 @@ pub struct Target {
     cur_macro: Option<(String, Macro)>,
     macro_label_ctx: Vec<(usize, LabelCtx)>,    // (invoke_id, label_ctx)
     macro_invoke: usize,
+    cur_macro_args: HashMap<String, Vec<Token>>,
     functions: HashMap<String, (usize, Expression)>,
     label_idx: IndexSet<Label>,
     label_ctx: LabelCtx,
@@ -49,6 +50,7 @@ impl Target {
             macros: HashMap::new(),
             macro_label_ctx: vec![],
             macro_invoke: 0,
+            cur_macro_args: HashMap::new(),
             cur_macro: None,
             label_idx: IndexSet::new(),
             label_ctx: LabelCtx::default(),
@@ -82,6 +84,9 @@ impl Target {
             u32::from_le_bytes(v) as f64
         })
     }
+    pub fn can_read_file(&mut self, source: &ContextStr, filename: &str) -> bool {
+        self.read_file(source, filename).is_ok()
+    }
     pub fn read_rom(&mut self, source: &ContextStr, addr: u32, len: usize) -> Result<f64, Message> {
         self.rom_cache.read_at(addr, len, source)
     }
@@ -97,11 +102,12 @@ impl Target {
     pub fn push_warning(&mut self, source: ContextStr, data: String) {
         Message::warning(source, data).push();
     }
+    pub fn cur_macro_args(&self) -> &HashMap<String, Vec<Token>> { &self.cur_macro_args }
     pub fn macro_invoke(&self) -> Option<usize> { self.macro_label_ctx.last().map(|c| c.0) }
     pub fn defines(&self) -> &HashMap<String, Vec<Token>> { &self.defines }
-    pub fn label_id(&mut self, mut label: Label) -> usize {
+    pub fn label_id(&mut self, mut label: Label, global: bool) -> usize {
         label.glue_sub();
-        if self.namespace.len() > 0 {
+        if !global && self.namespace.len() > 0 {
             label.glue_namespace(&self.namespace);
         }
         self.label_idx.insert_full(label).0
@@ -130,7 +136,6 @@ impl Target {
     }
     pub fn finish_macro(&mut self) {
         let m = self.cur_macro.take().unwrap();
-        //println!("got macro: {:?}", m.1.blocks);
         self.macros.insert(m.0, m.1);
     }
     pub fn get_macro(&self, name: &str) -> Option<&Macro> {
@@ -151,7 +156,10 @@ impl Target {
             &mut self.label_ctx
         }
     }
-    pub fn set_label(&mut self, mut label: Label, context: ContextStr) -> usize {
+    pub fn in_macro(&self) -> bool {
+        self.macro_label_ctx.len() != 0
+    }
+    pub fn set_label(&mut self, mut label: Label, global: bool, context: ContextStr) -> usize {
         match &mut label {
             Label::Named { stack, invoke } => self.label_ctx(*invoke).named = stack.clone(),
             Label::AnonPos { depth, pos, invoke } => {
@@ -172,10 +180,8 @@ impl Target {
             },
             _ => {}
         }
-        //label.glue_sub();
-        //let (id, _) = self.label_idx.insert_full(label.clone());
-        let id = self.label_id(label.clone());
-        //println!("set label {} to {:?}", id, label);
+        let id = self.label_id(label.clone(), global);
+        //println!("set label {} to {:?}{}", id, label, if global { " (global)" } else { "" });
         id
     }
     pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
@@ -329,7 +335,8 @@ pub fn exec_file(filename: &str, source: ContextStr, target: &mut Target, asm: &
     ctx.path.pop();
     while let Some((i, nl)) = { tokens.seek(ctx.exec_ptr); tokens.split_off(true) } {
         ctx.next_exec_ptr = tokens.pos();
-        exec_stmt(i.rest(), nl, target, &mut ctx, &HashMap::new(), asm);
+        target.cur_macro_args = HashMap::new();
+        exec_stmt(i.rest(), nl, target, &mut ctx, asm);
         ctx.exec_ptr = ctx.next_exec_ptr;
     }
     target.profiler(&format!("done {}", ff));
@@ -350,7 +357,8 @@ pub fn exec_macro(name: &str, args: Vec<Vec<Token>>, source: ContextStr, target:
     target.macro_label_ctx.push((target.macro_invoke, LabelCtx::default()));
     target.macro_invoke += 1;
     while let Some((t, newline)) = mac.blocks.get(ctx.exec_ptr) {
-        exec_stmt(t, *newline, target, &mut ctx, &args, asm);
+        target.cur_macro_args = args.clone();   // TODO: this is suboptimal
+        exec_stmt(t, *newline, target, &mut ctx, asm);
         ctx.exec_ptr += 1;
     }
     target.macro_label_ctx.pop();

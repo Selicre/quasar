@@ -334,7 +334,10 @@ fn define_name(input: &ContextStr, escaped: bool) -> ContextStr {
     }
     i
 }
-pub fn expand_str(mut input: ContextStr, target: &mut Target) -> Option<String> {
+pub fn expand_str(
+    mut input: ContextStr,
+    target: &mut Target
+) -> Option<String> {
     let orig = input.clone();
     let mut out = String::new();
 
@@ -358,6 +361,17 @@ pub fn expand_str(mut input: ContextStr, target: &mut Target) -> Option<String> 
             } else {
                 errors::define_unknown(name.clone()).push();
                 return None;
+            }
+        }
+        if target.in_macro() && c == '<' && next_ident {
+            if let Some(n) = input.find('>') {
+                let mut arg_name = input.advance(n);
+                input.advance(1);
+                arg_name.advance(1);
+                let value = target.cur_macro_args().get(&*arg_name).unwrap();
+                let value = value.iter().map(|c| &*c.span).collect::<Vec<_>>().concat();
+                out.push_str(&value);
+                continue;
             }
         }
         input.advance_char();

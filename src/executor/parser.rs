@@ -173,6 +173,22 @@ fn glue_tokens(tokens: &mut Vec<Token>) {
     // TODO: this is kinda really hacky, but if you do this you do not deserve good diagnostics
     let mut cur = 0;
     while cur < tokens.len() {
+        // attempt to glue $<thing>
+        if cur + 1 < tokens.len() && tokens[cur].span.eq("$") && (tokens[cur+1].is_ident() || tokens[cur+1].is_decimal()) {
+            if let Ok(c) = i64::from_str_radix(&tokens[cur+1].span, 16) {
+                let mut span = tokens[cur].span.clone();
+                let new_token = Token {
+                    span,
+                    kind: TokenKind::Number {
+                        value: c,
+                        radix: 16,
+                        length: tokens[cur+1].span.len()
+                    }
+                };
+                tokens.splice(cur..cur+2, std::iter::once(new_token));
+                continue;
+            }
+        }
         if !tokens[cur].is_ident() && !(tokens[cur].is_define() && !tokens[cur].is_define_escaped().unwrap()) {
             cur += 1;
             continue;
@@ -612,7 +628,9 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                     }
                 }
                 // todo: is ident
-                if !target.namespace_nested {
+                if target.namespace_nested {
+                    target.namespace.pop();
+                } else {
                     target.namespace.clear();
                 }
                 if !c.span.eq("off") {
@@ -770,24 +788,29 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             asm.append(stmt, target);
         }
         "print" => {
-            //let c = tokens.next_non_wsp().map(|c| c.span.to_string()).unwrap_or("".into());
-            //target.push_msg(Message::info(cmd.span.clone(), 0, c))
-            let next = tokens.peek_non_wsp();
-            match next {
-                Some(c) if c.span.eq("freespaceuse") => {
-                    let stmt = Statement::print(Expression::string(c.span.clone(), "freespaceuse"), cmd.span.clone());
-                    asm.append(stmt, target);
-                    return;
-                }
-                Some(_) => {}
-                None => {
-                    errors::cmd_no_arg(cmd.span.clone(), "print", "message", "\"hello world\"").push();
-                    return;
+            let mut exprs = vec![];
+            while let Some(c) = tokens.peek_non_wsp() {
+                match c {
+                    c if c.span.eq("freespaceuse") => {
+                        exprs.push(Expression::string(c.span.clone(), "freespaceuse"));
+                        tokens.next_non_wsp();
+                    }
+                    c if c.span.eq("pc") => {
+                        exprs.push(Expression::pc(c.span.clone()));
+                        tokens.next_non_wsp();
+                    }
+                    c if c.span.eq(",") => { tokens.next_non_wsp(); }
+                    _ => {
+                        exprs.push(Expression::parse(&mut tokens, target));
+                    }
                 }
             }
+            if exprs.len() == 0 {
+                errors::cmd_no_arg(cmd.span.clone(), "print", "message", "\"hello world\"").push();
+                return;
+            }
 
-            let c = Expression::parse(&mut tokens, target);
-            let stmt = Statement::print(c, cmd.span.clone());
+            let stmt = Statement::print(exprs, cmd.span.clone());
             asm.append(stmt, target);
         }
         "expr" => {

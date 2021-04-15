@@ -103,7 +103,8 @@ pub struct PatchParams {
 #[derive(Default)]
 struct PatchState {
     labels: HashMap<String, u32>,
-    prints: Vec<String>
+    print_ptrs: Vec<*const c_char>,
+    print_data: Vec<u8>,
 }
 
 thread_local! {
@@ -158,6 +159,14 @@ pub unsafe extern "C" fn asar_patch(
     MsgQueue::drain(|i| {
         println!("{}", i);
     });
+    /*for (k,v) in target.labels().clone().iter().enumerate() {
+        if let Some(expr) = asm.get_label_value(k).cloned() {
+            let expr = expr.try_eval_float(&mut target, &mut asm).unwrap();
+            println!("%{}: {:?} => {}", k, v, expr);
+        } else {
+            println!("%{}: {:?}", k, v);
+        }
+    }*/
     if MsgQueue::has_error() {
         println!("Assembly failed");
         return 0;
@@ -186,6 +195,19 @@ pub unsafe extern "C" fn asar_patch(
                 }
             }
         }
+        let prints = target.prints();
+        let mut lengths = vec![];
+        for i in prints {
+            lengths.push(state.print_data.len());
+            state.print_data.extend_from_slice(i.as_bytes());
+            state.print_data.push(0);
+        }
+        for i in lengths {
+            let c = state.print_data.as_ptr().add(i) as _;
+            state.print_ptrs.push(c);
+        }
+        println!("{:?}", state.print_ptrs);
+        println!("{:?}", String::from_utf8_lossy(&state.print_data));
     });
     1
 }
@@ -212,7 +234,13 @@ pub unsafe extern "C" fn asar_getwarnings(count: *mut c_int) -> *const ErrorData
 
 #[no_mangle]
 pub unsafe extern "C" fn asar_getprints(count: *mut c_int) -> *const *const c_char {
-    *count = 0; std::ptr::null()
+    use std::ffi::CString;
+    STATE.with(|c| {
+        let c = c.borrow();
+        *count = c.print_ptrs.len() as _;
+        println!("got {} prints", *count);
+        c.print_ptrs.as_ptr()
+    })
 }
 
 #[no_mangle]

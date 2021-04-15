@@ -32,6 +32,9 @@ impl Expression {
     pub fn empty() -> Self {
         Self { nodes: vec![] }
     }
+    pub fn pc(span: ContextStr) -> Self {
+        Self { nodes: vec![(span.clone(), ExprNode::Call(0, span))] }
+    }
     pub fn value(span: ContextStr, value: f64) -> Self {
         Self { nodes: vec![(span, ExprNode::Value(Value::Literal { value, size_hint: 0 }))] }
     }
@@ -143,6 +146,12 @@ impl StackValue {
             _ => {}
         }
     }
+    pub fn to_string(&self) -> String {
+        match self {
+            Self::Number { value, .. } => format!("{}", value),
+            Self::String(s) => s.clone()
+        }
+    }
 }
 
 #[derive(Debug,Clone)]
@@ -182,8 +191,8 @@ impl Label {
         }
     }
     pub fn no_colon(&self) -> bool {
-        if let Label::Named { ref stack, .. } = self {
-            stack.len() > 1
+        if let Label::Named { ref stack, ref invoke } = self {
+            stack.len() > 1 || invoke.is_some()
         } else {
             true
         }

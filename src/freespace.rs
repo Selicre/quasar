@@ -42,8 +42,9 @@ pub fn parse_freespace(rom: &mut Rom) -> RomSpace {
                 push_fsp(&mut current_area, bank);
                 //println!("rat at ${:06X}, len {:04X}", get_addr(get_file_ptr(bank)), len);
                 let ptr = get_file_ptr(bank);
-                rats.push([ptr, ptr+len as usize]);
-                bank.advance(len as usize);
+                let len = len as usize + 1;
+                rats.push([ptr, ptr+len]);
+                bank.advance(len);
             }
         } else {
             if bank[0] != 0 {
@@ -65,8 +66,9 @@ pub fn write_rat(rom: &mut Rom, offset: usize, len: usize, span: &ContextStr) {
     use bytes::BufMut;
     let mut data = vec![];
     data.put(&b"STAR"[..]);
-    data.put_u16_le(len as u16);
-    data.put_u16_le(!(len as u16));
+    let len = (len-1) as u16;
+    data.put_u16_le(len);
+    data.put_u16_le(!len);
     rom.write_at_raw(offset as _, &data);
 }
 

@@ -24,6 +24,7 @@ pub struct Target {
     rom_cache: Rom,
     defines: HashMap<String, Vec<Token>>,
     macros: HashMap<String, Macro>,
+    prints: Vec<String>,
     cur_macro: Option<(String, Macro)>,
     macro_label_ctx: Vec<(usize, LabelCtx)>,    // (invoke_id, label_ctx)
     macro_invoke: usize,
@@ -48,6 +49,7 @@ impl Target {
             defines: HashMap::new(),
             functions: HashMap::new(),
             macros: HashMap::new(),
+            prints: vec![],
             macro_label_ctx: vec![],
             macro_invoke: 0,
             cur_macro_args: HashMap::new(),
@@ -63,6 +65,12 @@ impl Target {
             pad_byte: 0,
             profiler: std::time::Instant::now()
         }
+    }
+    pub fn prints(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.prints)
+    }
+    pub fn push_print(&mut self, s: String) {
+        self.prints.push(s);
     }
     // TODO: read relative to cwd
     pub fn read_file<'a>(&'a mut self, source: &ContextStr, filename: &str) -> Result<&'a [u8], Message> {
@@ -110,7 +118,12 @@ impl Target {
         if !global && self.namespace.len() > 0 {
             label.glue_namespace(&self.namespace);
         }
-        self.label_idx.insert_full(label).0
+        let l = label.clone();
+        let (id, new) = self.label_idx.insert_full(label);
+        if new {
+            println!("set label {} to {:?}{}", id, l, if global { " (global)" } else { "" });
+        }
+        id
     }
     pub fn label_name(&mut self, id: usize) -> Option<&Label> {
         self.label_idx.get_index(id)
@@ -181,7 +194,6 @@ impl Target {
             _ => {}
         }
         let id = self.label_id(label.clone(), global);
-        //println!("set label {} to {:?}{}", id, label, if global { " (global)" } else { "" });
         id
     }
     pub fn resolve_sub(&mut self, depth: usize, label: ContextStr) -> Vec<String> {
@@ -196,16 +208,18 @@ impl Target {
         }
     }
     pub fn resolve_anon(&mut self, depth: usize, pos: bool, label: ContextStr) -> usize {
+        let invoke = self.macro_invoke();
+        let lc = self.label_ctx(invoke);
         if pos {
-            if self.label_ctx.pos.len() <= depth {
-                self.label_ctx.pos.resize(depth+1, 0);
+            if lc.pos.len() <= depth {
+                lc.pos.resize(depth+1, 0);
             }
-            self.label_ctx.pos[depth]+1
+            lc.pos[depth]+1
         } else {
-            if self.label_ctx.neg.len() <= depth {
-                self.label_ctx.neg.resize(depth+1, 0);
+            if lc.neg.len() <= depth {
+                lc.neg.resize(depth+1, 0);
             }
-            self.label_ctx.neg[depth]
+            lc.neg[depth]
         }
     }
     pub fn resolve_char(&self, c: char) -> u32 {

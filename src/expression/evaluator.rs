@@ -111,12 +111,14 @@ impl Expression {
                                 [$({ $dummy; get_val(stack, target) }),*]
                             }
                         };
+                        (0) => { arity!(@l 0; ) };
                         (1) => { arity!(@l 1; 0) };
                         (2) => { arity!(@l 2; 0, 1) };
                         (3) => { arity!(@l 3; 0, 1, 2) };
                     }
                     let number = |value| StackValue::Number { value, origin: None };
                     macro_rules! func {
+                        (|| $b:expr) => {{ let []: [(); 0] = arity!(0); number($b) }};
                         (|$a0:ident| $b:expr) => {{ let [$a0] = arity!(1); number($b) }};
                         (|$a0:ident, $a1:ident| $b:expr) => {{ let [$a1,$a0] = arity!(2); number($b) }};
                         (|$a0:ident, $a1:ident, $a2:ident| $b:expr) => {{ let [$a2,$a1,$a0] = arity!(3); number($b) }};
@@ -140,6 +142,12 @@ impl Expression {
                         "floor" => func! { |a| a.floor() },
                         "ceil" => func! { |a| a.ceil() },
                         "select" => func! { |cond,a,b| if cond != 0.0 { a } else { b } },
+                        "pc" => {
+                            if *len != 0 {
+                                errors::expr_fn_arg_count(span.clone(), 0, *len).push();
+                            }
+                            StackValue::String(format!("{:06X}", asm.current_pc()))
+                        },
                         "datasize" => {
                             let label_name = stack.pop().expect("unbalanced expr");
                             if let StackValue::Number { origin: Some(c), .. } = label_name.1 {

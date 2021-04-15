@@ -60,6 +60,12 @@ impl Token {
     pub fn is_decimal(&self) -> bool {
         matches!(self.kind, TokenKind::Number { radix: 10, .. })
     }
+    pub fn as_char(&self) -> Option<char> {
+        match self.kind {
+            TokenKind::Char => Some(self.span.chars().nth(1).unwrap()),
+            _ => None
+        }
+    }
     pub fn as_number(&self) -> Option<i64> {
         match self.kind {
             TokenKind::Number { value, .. } => Some(value),
@@ -128,13 +134,8 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
             if &*close == ">" {
                 input = peek;
                 let span = input.prefix_from(needle);
-                if in_macro {
-                    out.push(Token { span, kind: TokenKind::MacroArg });
-                    continue;
-                } else {
-                    target.push_error(span.clone(), 0, format!("Macro token outside of macro"));
-                    return vec![]
-                }
+                out.push(Token { span, kind: TokenKind::MacroArg });
+                continue;
             }
         }   // try to parse macro arg
         if is_ident_start(c) {
@@ -259,6 +260,9 @@ pub fn tokenize_stmt(mut input: ContextStr, target: &mut Target, in_macro: bool)
                 peek.advance(1);
                 input = peek;
             }
+        } else if c == '\'' {
+            let span = input.advance(3);
+            out.push(Token { span, kind: TokenKind::Char });
         } else if c == '+' || c == '-' || c == '.' {
             let needle = input.needle();
             if input.skip_if("+=") {

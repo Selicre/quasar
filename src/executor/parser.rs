@@ -221,14 +221,25 @@ pub(super) fn exec_cmd(mut tokens: TokenList, newline: bool, target: &mut Target
 
     loop {
         let mut peek = tokens.clone();
+        let mut unstructured = false;
         // Parse labels
+        if let Some(c) = peek.peek_non_wsp() {
+            if c.span.eq("#") {
+                peek.next_non_wsp();
+                unstructured = true;
+            }
+        }
         if let Some(c) = expression::parse_label(&mut peek, false, target) {
             let ate_colon = peek.peek().map(|n| n.span.eq(":")).unwrap_or(false);
             if ate_colon { peek.next(); }
             if c.1.no_colon() || ate_colon {
                 tokens = peek;
                 if ctx.enabled() {
-                    let id = target.set_label(c.1, c.0.clone());
+                    let id = if unstructured {
+                        target.label_id(c.1)
+                    } else {
+                        target.set_label(c.1, c.0.clone())
+                    };
                     asm.append(Statement::label(id, c.0), target);
                 }
                 continue;
@@ -584,8 +595,16 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         "{" | "}" => {},
         "namespace" => {
             if let Some(c) = tokens.peek_non_wsp() {
+                if c.span.eq("nested") {
+                    if let Some(c) = tokens.peek_non_wsp() {
+                        target.namespace_nested = !c.span.eq("off");
+                        return;
+                    }
+                }
                 // todo: is ident
-                target.namespace.clear();
+                if !target.namespace_nested {
+                    target.namespace.clear();
+                }
                 if !c.span.eq("off") {
                     target.namespace.push(c.span.to_string());
                 }
@@ -596,11 +615,36 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
         }
         "prot" => {},
         "autoclean" => {
+            if let Some(c) = tokens.peek_non_wsp() {
+                if c.as_number().is_some() {
+                    return;
+                }
+            }
             // TODO: actually clean shit
             exec_enabled(tokens, newline, target, ctx, asm);
         }
         "freespace" | "freecode" | "freedata" => {
-            asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Freecode, target);
+            let mut ram = None;
+            let mut align = false;
+            let mut cleaned = false;
+            let mut static_ = false;
+            let mut value = None;
+            while let Some(c) = tokens.next_non_wsp() {
+                match &*c.span {
+                    "," => {},
+                    "ram" => ram = Some(true),
+                    "noram" => ram = Some(false),
+                    "align" => align = true,
+                    "cleaned" => cleaned = true,
+                    "static" => static_ = true,
+                    _ => {
+                        let expr = Expression::parse(&mut tokens, target);
+                        value = Some(expr.eval_const(target));
+                        break;
+                    }
+                }
+            }
+            asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Freespace { align }, target);
         }
         "org" => {
             if let Some(c) = tokens.peek_non_wsp() {

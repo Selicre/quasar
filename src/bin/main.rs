@@ -1,21 +1,12 @@
-#![deny(unused_must_use)]
 
-//mod splitter;
-mod context;
-mod message;
-mod executor;
-mod lexer;
-mod expression;
-mod assembler;
-mod instruction;
-mod rom;
-mod freespace;
-
-use executor::Target;
-use assembler::Assembler;
-use context::ContextStr;
-use message::MsgQueue;
-use rom::Rom;
+use quasar::{
+    executor::{self, Target},
+    assembler::Assembler,
+    context::ContextStr,
+    message::MsgQueue,
+    rom::Rom,
+    freespace
+};
 
 fn main() {
     let asm_file = std::env::args().nth(1).expect("args pls");

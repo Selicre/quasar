@@ -35,6 +35,7 @@ pub struct Target {
     table_stack: Vec<HashMap<char, u32>>,
     pc_stack: Vec<usize>,
     namespace: Vec<String>,
+    namespace_nested: bool,
     pad_byte: u8,
     profiler: std::time::Instant,
 }
@@ -56,6 +57,7 @@ impl Target {
             table_stack: vec![],
             pc_stack: vec![],
             namespace: vec![],
+            namespace_nested: false,
             pad_byte: 0,
             profiler: std::time::Instant::now()
         }
@@ -199,6 +201,9 @@ impl Target {
             }
             self.label_ctx.neg[depth]
         }
+    }
+    pub fn resolve_char(&self, c: char) -> u32 {
+        self.table.get(&c).cloned().unwrap_or(c as u32)
     }
 }
 /*

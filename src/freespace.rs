@@ -92,7 +92,7 @@ pub fn resolve_freespace(rom: &mut Rom, asm: &mut Assembler) {
     'outer: for s_idx in 0..asm.segments().len() {
         let i = &asm.segments()[s_idx];
         match i.start {
-            StartKind::Freecode | StartKind::Freedata => {
+            StartKind::Freespace { align } => {
                 let seg_len = get_segment_len(i, asm);
                 for (idx, c) in fsp.free.iter().enumerate() {
                     let [mut start, end] = c;
@@ -100,9 +100,9 @@ pub fn resolve_freespace(rom: &mut Rom, asm: &mut Assembler) {
                     // does it fit without bankcrossing?
                     let bank_border = (start & !0x7FFF) + 0x8000;
                     println!("{:06X} {:06X} {:06X} {:06X}", start, end, start + seg_len + 8, bank_border);
-                    if start + i.offset + 8 >= bank_border {
+                    if start + i.offset + 8 >= bank_border || align {
                         if *end < bank_border { continue; }
-                        start = bank_border;
+                        start = bank_border - 8;
                         if end - start <= seg_len + 8 { continue; }
                         println!("corr: {:06X} {:06X} {:06X} {:06X}", start, end, start + seg_len + 8, bank_border);
                     }

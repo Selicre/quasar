@@ -20,6 +20,11 @@ pub fn parse_literal(tokens: &mut TokenList<'_>, target: &mut Target) -> Option<
             let exp = crate::lexer::display_str(&exp);
             (t.span.clone(), ExprNode::Value(Value::String(exp)))
         }
+        TokenKind::Char => {
+            let ch = t.span.chars().nth(2).unwrap();
+            let value = target.resolve_char(ch) as f64;
+            (t.span.clone(), ExprNode::Value(Value::Literal { value, size_hint: 1 }))
+        }
         _ => return None
     };
     *tokens = peek;

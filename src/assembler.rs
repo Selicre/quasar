@@ -9,8 +9,7 @@ use std::io::{SeekFrom, Seek, Write};
 
 pub enum StartKind {
     Expression(Expression),
-    Freecode,
-    Freedata
+    Freespace { align: bool },
 }
 
 pub struct Segment {

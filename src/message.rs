@@ -5,6 +5,7 @@ use std::fmt::Display;
 #[derive(Clone, Copy, Debug)]
 pub enum Severity {
     Error,
+    Lint,
     Warning,
     Info,
     Debug
@@ -14,6 +15,7 @@ impl Severity {
     pub fn name(&self) -> &'static str {
         match self {
             Severity::Error => "error",
+            Severity::Lint => "lint",
             Severity::Warning => "warning",
             Severity::Info => "info",
             Severity::Debug => "debug",
@@ -22,6 +24,7 @@ impl Severity {
     pub fn symbol(&self) -> &'static str {
         match self {
             Severity::Error => "E",
+            Severity::Lint => "L",
             Severity::Warning => "W",
             Severity::Info => "I",
             Severity::Debug => "D"
@@ -30,6 +33,7 @@ impl Severity {
     pub fn color(&self) -> i32 {
         match self {
             Severity::Error => 9,
+            Severity::Lint => 13,
             Severity::Warning => 11,
             Severity::Info => 12,
             Severity::Debug => 10
@@ -104,6 +108,12 @@ impl Message {
     }
     pub fn error(source: ContextStr, code: usize, data: String) -> Self {
         let severity = Severity::Error;
+        Message {
+            source, severity, data, help: vec![]
+        }
+    }
+    pub fn lint(source: ContextStr, data: String) -> Self {
+        let severity = Severity::Lint;
         Message {
             source, severity, data, help: vec![]
         }
@@ -194,6 +204,7 @@ pub mod errors {
         cmd_no_arg(cmd: &str, arg: &str, example: &str) { "`{}` command with no {}", cmd, arg } { "add an argument, like `{} {}`", cmd, example }
         cmd_unknown_sep() { "Unknown separator" }
         cmd_unknown() { "Unknown command" }
+        pushbase_no_base() { "`pushbase` with no `base`" }
 
         // rom
         rom_unmapped() { "Address does not map to ROM" }
@@ -206,6 +217,6 @@ pub mod errors {
         expr_read_file_oob() { "File read out of bounds" }
 
         // instructions
-        instr_rel_oob(val: i32) { "Relative instruction out of range ({} bytes, range: -128..127)", val } { "reduce the code size between the label and the branch instruction" }
+        instr_rel_oob(val: i32, c: i32, t: i32) { "Relative instruction out of range ({:06X} -> {:06X}, {} bytes, range: -128..127)", c, t, val } { "reduce the code size between the label and the branch instruction" }
     }
 }

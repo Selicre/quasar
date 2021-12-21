@@ -582,6 +582,20 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             let c = Expression::label(cmd.span.clone(), label);
             asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Expression(c), target);
         }
+        "pushbase" => {
+            let base = asm.current_base();
+            if let Some(base) = base {
+                target.base_stack.push(base);
+            } else {
+                errors::pushbase_no_base(cmd.span.clone()).push();
+            }
+        }
+        "pullbase" => {
+            let val = target.base_stack.pop().unwrap();
+            println!("{:?}", val);
+            let stmt = Statement::base(Some(val), cmd.span.clone());
+            asm.append(stmt, target);
+        }
         "table" => {
             // TODO: handle ,ltr/,rtl
             let temp;
@@ -812,6 +826,38 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
 
             let stmt = Statement::print(exprs, cmd.span.clone());
             asm.append(stmt, target);
+        }
+        "const_print" => {
+            // Temp hack until I get eager consteval for exprs
+            let mut exprs = vec![];
+            while let Some(c) = tokens.peek_non_wsp() {
+                match c {
+                    c if c.span.eq("freespaceuse") => {
+                        exprs.push(Expression::string(c.span.clone(), "freespaceuse"));
+                        tokens.next_non_wsp();
+                    }
+                    c if c.span.eq("pc") => {
+                        exprs.push(Expression::pc(c.span.clone()));
+                        tokens.next_non_wsp();
+                    }
+                    c if c.span.eq(",") => { tokens.next_non_wsp(); }
+                    _ => {
+                        exprs.push(Expression::parse(&mut tokens, target));
+                    }
+                }
+            }
+            if exprs.len() == 0 {
+                errors::cmd_no_arg(cmd.span.clone(), "const_print", "message", "\"hello world\"").push();
+                return;
+            }
+            let mut out = String::new();
+            for i in exprs {
+                if let Some((s, val)) = i.try_eval_const(target) {
+                    let s = val.to_string();
+                    out.push_str(&s);
+                }
+            }
+            println!("{}", out);
         }
         "expr" => {
             let c = Expression::parse(&mut tokens, target);

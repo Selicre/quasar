@@ -225,6 +225,17 @@ impl Expression {
                             let value = if target.defines().contains_key(&v) { 1.0 } else { 0.0 };
                             StackValue::Number { value, origin: None }
                         },
+                        "source" => {
+                            if *len > 1 {
+                                errors::expr_fn_arg_count(span.clone(), "0 or 1", *len).push();
+                                return None;
+                            } else if *len == 1 {
+                                let (span, arg) = stack.pop().expect("unbalanced expr");
+                                StackValue::String(format!("{}", span.source().short()))
+                            } else {
+                                StackValue::String(format!("{}", target.current_line().short()))
+                            }
+                        },
                         "hex" => {
                             let [arg1] = arity!(1);
                             StackValue::String(format!("{:X}", arg1 as i64))
@@ -317,5 +328,8 @@ impl Expression {
             },
             None => String::new()
         }
+    }
+    pub fn try_eval_const(&self, target: &mut Target) -> Option<(ContextStr, StackValue)> {
+        self.try_eval(true, target, &Assembler::new())
     }
 }

@@ -67,6 +67,19 @@ impl Rom {
     pub fn set_bankcross(&mut self, bankcross: bool) {
         self.bankcross = bankcross;
     }
+    pub fn check_bankcross(&mut self, old: u32, new: u32) -> bool {
+        if !self.bankcross {
+            let old = self.mapper.map_to_file(old as _);
+            let new = self.mapper.map_to_file(new as _);
+            if let Some((old,new)) = old.zip(new) {
+                old >> 15 != new >> 15
+            } else {
+                true
+            }
+        } else {
+            false
+        }
+    }
     pub fn read_at(&mut self, addr: u32, len: usize, span: &ContextStr) -> Result<f64, Message> {
         let offset = self.mapper.map_to_file(addr as _)
             .ok_or(errors::rom_unmapped(span.clone()))?;

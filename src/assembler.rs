@@ -8,11 +8,13 @@ use std::collections::HashMap;
 use std::io::{SeekFrom, Seek, Write};
 use std::cell::Cell;
 
+#[derive(Clone)]
 pub enum StartKind {
     Expression(Expression),
     Freespace { align: bool },
 }
 
+#[derive(Clone)]
 pub struct Segment {
     pub start: StartKind,
     pub label_id: usize,
@@ -38,6 +40,12 @@ impl Segment {
         });
         self.stmts.push(stmt);
         self.stmts.last().unwrap()
+    }
+    pub fn statements_mut(&mut self) -> &mut [Statement] {
+        &mut self.stmts
+    }
+    pub fn statements(&self) -> &[Statement] {
+        &self.stmts
     }
 }
 
@@ -72,6 +80,12 @@ impl Assembler {
             }
         }
         return None;
+    }
+    pub fn current_base(&mut self) -> Option<usize> {
+        self.segments.last().and_then(|c| c.base_offset)
+    }
+    pub fn segments_vec(&mut self) -> &mut Vec<Segment> {
+        &mut self.segments
     }
     pub fn segments_mut(&mut self) -> &mut [Segment] {
         &mut self.segments
@@ -142,7 +156,7 @@ impl Assembler {
         }
     }
     pub fn write_to_rom(&self, target: &mut Target, rom: &mut Rom) -> Option<()> {
-        let debug = true;
+        let debug = false;
         let mut last_addr = 0x8000;
         for i in self.segments.iter() {
             let addr = match &i.start {
@@ -162,13 +176,23 @@ impl Assembler {
                     crate::message::errors::rom_bank_crossed(i.span.clone()).push();
                 }
             }
+            let mut last_addr_bc = addr;
+            let addr_start = addr;
             let mut ch = 0;
             for s in i.stmts.iter() {
                 if ch != s.offset { println!("uh oh wrong offset: {} != {}", ch, s.offset); }
                 ch += s.size;
-                //w.seek(SeekFrom::Start(offset + s.offset as u64));
-                last_addr = label_offset(addr, s.offset as u32 + s.size as u32);
-                let addr = label_offset(addr, s.offset as u32);
+
+                last_addr = label_offset(addr_start, s.offset as u32 + s.size as u32);
+                let addr = label_offset(addr_start, s.offset as u32);
+
+                if rom.check_bankcross(last_addr_bc, addr) {
+                    crate::message::errors::rom_bank_crossed(s.span.clone()).with_help(format!("{:06X} -> {:06X}", last_addr_bc, addr)).push();
+                    break;
+                }
+                if s.size > 0 {
+                    last_addr_bc = label_offset(addr_start, s.offset as u32 + s.size as u32 - 1);
+                }
                 self.current_pc.set(addr);
                 match &s.kind {
                     StatementKind::Print { expr } => {
@@ -191,27 +215,29 @@ impl Assembler {
                     StatementKind::InstructionRel { opcode, expr } => {
                         rom.write_at(addr, &[*opcode], &s.span)?;
                         if let Some(val) = expr.try_eval_int(target, self) {
-                            let mut val = val as i32;
-                            //println!("rel val: {:06X} - {:06X}", val, addr + s.size as u32);
-                            if expr.contains_label() {
+                            let offset = if expr.contains_label() {
                                 // actually make relative
                                 if let Some(base) = s.base {
-                                    val = val.wrapping_sub(base as i32 + s.offset as i32);
+                                    base as i32 + s.size as i32
                                 } else {
-                                    val = val.wrapping_sub(addr as i32 + s.size as i32);
+                                    addr as i32 + s.size as i32
                                 }
-                            }
+                            } else {
+                                0
+                            };
+                            //println!("rel val: {:06X} - {:06X}", val, offset);
+                            let rel = (val as i32).wrapping_sub(offset);
                             if s.size == 2 {
-                                if val < -128 || val > 127 {
-                                    crate::message::errors::instr_rel_oob(s.span.clone(), val).push();
+                                if rel < -128 || rel > 127 {
+                                    crate::message::errors::instr_rel_oob(s.span.clone(), rel, offset, val as i32).push();
                                 }
                             }
-                            let val = val.to_le_bytes();
-                            rom.write_at(addr+1, &val[..s.size-1], &s.span)?;
+                            let rel = rel.to_le_bytes();
+                            rom.write_at(addr+1, &rel[..s.size-1], &s.span)?;
                         }
                     },
-                    StatementKind::Instruction { opcode, expr } => {
-                        rom.write_at(addr, &[*opcode], &s.span);
+                    StatementKind::Instruction { opcode, expr, .. } => {
+                        rom.write_at(addr, &[*opcode], &s.span)?;
                         if s.size > 1 {
                             if let Some(val) = expr.try_eval_int(target, self) {
                                 let val = val.to_le_bytes();
@@ -226,7 +252,7 @@ impl Assembler {
                     },
                     StatementKind::Skip => {}
                     StatementKind::Binary { data } => {
-                        rom.write_at(addr, &data, &s.span);
+                        rom.write_at(addr, &data, &s.span)?;
                     }
                     StatementKind::WarnPc { expr } => {
                         let val = if let Some(c) = expr.try_eval_int(target, self) { c } else { continue; };
@@ -277,10 +303,23 @@ impl Assembler {
 }
 
 pub fn label_offset(start: u32, offset: u32) -> u32 {
-    start + (offset&0x7FFF) + ((offset&0xFF8000) << 1)
+    let bank_start = start & 0xFF8000;
+    let offset = offset + (start - bank_start);
+    bank_start + (offset&0x7FFF) + ((offset&0xFF8000) << 1)
 }
 
-#[derive(Debug)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn label_offset_works() {
+        assert_eq!(label_offset(0x8000, 0x8000), 0x18000);
+        assert_eq!(label_offset(0x8000, 0x10000), 0x28000);
+        assert_eq!(label_offset(0xFFFF, 1), 0x18000);
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Statement {
     pub offset: usize,          // from the start of the segment
     pub base: Option<usize>,    // if some, then this is used as the absolute value
@@ -289,14 +328,22 @@ pub struct Statement {
     pub span: ContextStr
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub enum BankOpt {
+    None,
+    Value(u8),
+    Pc,
+}
+
+#[derive(Debug, Clone)]
 pub enum StatementKind {
     Data {
         expr: Expression
     },
     Instruction {
         opcode: u8,
-        expr: Expression
+        expr: Expression,
+        opt_bank: BankOpt
     },
     InstructionRel {
         opcode: u8,
@@ -342,7 +389,7 @@ impl Statement {
         Statement::new(StatementKind::Label(data), 0, span)
     }
     pub fn instruction(opcode: u8, expr: Expression, size: usize, span: ContextStr) -> Self {
-        Statement::new(StatementKind::Instruction { opcode, expr }, size, span)
+        Statement::new(StatementKind::Instruction { opcode, expr, opt_bank: BankOpt::Pc }, size, span)
     }
     pub fn instruction_rel(opcode: u8, expr: Expression, size: usize, span: ContextStr) -> Self {
         Statement::new(StatementKind::InstructionRel { opcode, expr }, size, span)
@@ -389,7 +436,7 @@ impl std::fmt::Display for Statement {
                 }
                 Ok(())
             },
-            StatementKind::Instruction { opcode, expr } => {
+            StatementKind::Instruction { opcode, expr, .. } => {
                 write!(f, "instr ${:02X}", opcode)?;
                 if !expr.is_empty() {
                     write!(f, ": {}", expr)?;

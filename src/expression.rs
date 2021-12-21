@@ -284,7 +284,13 @@ impl Binop {
             And =>from_bool((l != 0.0) && (r != 0.0)),
             Or => from_bool((l != 0.0) || (r != 0.0)),
             BlockMove => (((ri & 0xFF) << 8) | (li & 0xFF)) as f64,
-            LabelOffset => (ri + (li&0x7FFF) + ((li&0xFF8000) << 1)) as f64
+            LabelOffset => {
+                let start = ri;
+                let offset = li;
+                let bank_start = start & 0xFF8000;
+                let offset = offset + (start - bank_start);
+                (bank_start + (offset&0x7FFF) + ((offset&0xFF8000) << 1)) as f64
+            }
         }
     }
 }

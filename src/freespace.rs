@@ -27,8 +27,8 @@ pub fn parse_freespace(rom: &mut Rom) -> RomSpace {
     let mut push_fsp = |cur: &mut Option<usize>, bank: &[u8]| {
         if let Some(c) = cur.take() {
             let r = get_file_ptr(bank);
+            println!("free space at ${:06X}, len {:04X}", get_addr(c), r-c);
             if r-c >= 16 {
-                //println!("free space at ${:06X}, len {:04X}", get_addr(c), r-c);
                 free.push([c,r]);
             }
         }
@@ -40,15 +40,16 @@ pub fn parse_freespace(rom: &mut Rom) -> RomSpace {
             let unlen = bank.get_u16_le();
             if len == !unlen {
                 push_fsp(&mut current_area, bank);
-                //println!("rat at ${:06X}, len {:04X}", get_addr(get_file_ptr(bank)), len);
+                println!("rat at ${:06X}, len {:04X}", get_addr(get_file_ptr(bank)), len);
                 let ptr = get_file_ptr(bank);
                 let len = len as usize + 1;
                 rats.push([ptr, ptr+len]);
+                check_nested_rats(&bank[..len]);
                 bank.advance(len);
             }
         } else {
             if bank[0] != 0 {
-                //println!("Unprotected byte {:02X} at ${:06X}", bank[0], get_addr(get_file_ptr(bank)));
+                println!("Unprotected byte {:02X} at ${:06X}", bank[0], get_addr(get_file_ptr(bank)));
                 push_fsp(&mut current_area, bank);
             } else {
                 if current_area.is_none() {
@@ -60,6 +61,17 @@ pub fn parse_freespace(rom: &mut Rom) -> RomSpace {
     }
     push_fsp(&mut current_area, bank);
     RomSpace { free, rats }
+}
+
+pub fn check_nested_rats(mut data: &[u8]) {
+    if let Some(n) = data.windows(4).position(|c| c == b"STAR") {
+        data.advance(n);
+        let len = data.get_u16_le();
+        let unlen = data.get_u16_le();
+        if len == !unlen {
+            println!("uh oh nested rat!! at offset ${:X}, len {:X}", n, len);
+        }
+    }
 }
 
 pub fn write_rat(rom: &mut Rom, offset: usize, len: usize, span: &ContextStr) {
@@ -89,6 +101,7 @@ pub fn get_segment_len(i: &Segment, asm: &Assembler) -> usize {
     seg_len
 }
 
+//pub fn run_autoclean(rom: &mut Rom, addrs: Vec<) {
 pub fn resolve_freespace(rom: &mut Rom, asm: &mut Assembler) {
     let mut fsp = parse_freespace(rom);
     'outer: for s_idx in 0..asm.segments().len() {

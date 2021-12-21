@@ -16,6 +16,19 @@ fn main() {
 
     mnemonics.remove(b"rep");    // grumble
 
+    writeln!(&mut file, "pub fn lower_to_16(op: u8) -> Option<u8> {{ match op {{");
+    for (k,v) in map.iter() {
+        if let Some(c) = lower_to_16(k[3]) {
+            let mut r = *k;
+            r[3] = c;
+            if let Some(out) = map.get(&r) {
+                writeln!(&mut file,
+                    "    {} => Some({}),", v, out);
+            }
+        }
+    }
+    writeln!(&mut file, "    _ => None\n}} }}");
+
     let mut map2 = phf_codegen::Map::new();
     for (k,v) in map {
         map2.entry(k,&format!("{}", v));
@@ -60,6 +73,18 @@ enum AddressingMode {
     RelativeWord,
     BlockMove
 }
+
+fn lower_to_16(mode: u8) -> Option<u8> {
+    // this fn is technically unsafe, but who cares, this is a build script
+    // that said don't pass anything invalid here or you will blow up
+    let c = unsafe { std::mem::transmute(mode) };
+    match c {
+        AddressingMode::AbsLong => Some(AddressingMode::Absolute as u8),
+        AddressingMode::AbsLongX => Some(AddressingMode::AbsoluteX as u8),
+        _ => None
+    }
+}
+
 fn populate(map: &mut HashMap<[u8;4], u8>, mnemonics: &mut HashSet<[u8;3]>) {
     use AddressingMode::*;
 

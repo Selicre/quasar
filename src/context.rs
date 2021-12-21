@@ -88,6 +88,20 @@ impl ContextStr {
         let full = "".into();
         ContextStr { full, source, range, parent: None }
     }
+    pub fn internal() -> Self {
+        let range = 0..0;
+        let source = LineInfo::custom("<internal>".into());
+        let full = "".into();
+        ContextStr { full, source, range, parent: None }
+    }
+    pub fn top_parent(&self) -> &ContextStr {
+        // TODO: not recursive?
+        if let Some(c) = self.parent() {
+            c.top_parent()
+        } else {
+            &self
+        }
+    }
     pub fn set_parent(&mut self, parent: ContextStr) {
         // TODO: not recursive?
         if let Some(c) = self.parent_mut() {

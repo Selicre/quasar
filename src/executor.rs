@@ -36,9 +36,11 @@ pub struct Target {
     table: HashMap<char, u32>,
     table_stack: Vec<HashMap<char, u32>>,
     pc_stack: Vec<usize>,
+    base_stack: Vec<usize>,
     namespace: Vec<String>,
     namespace_nested: bool,
     pad_byte: u8,
+    current_cmd: ContextStr,
     profiler: std::time::Instant,
 }
 impl Target {
@@ -60,11 +62,16 @@ impl Target {
             table: HashMap::new(),
             table_stack: vec![],
             pc_stack: vec![],
+            base_stack: vec![],
             namespace: vec![],
             namespace_nested: false,
             pad_byte: 0,
+            current_cmd: ContextStr::empty(),
             profiler: std::time::Instant::now()
         }
+    }
+    pub fn current_line(&self) -> &LineInfo {
+        self.current_cmd.source()
     }
     pub fn prints(&mut self) -> Vec<String> {
         std::mem::take(&mut self.prints)
@@ -121,7 +128,7 @@ impl Target {
         let l = label.clone();
         let (id, new) = self.label_idx.insert_full(label);
         if new {
-            println!("set label {} to {:?}{}", id, l, if global { " (global)" } else { "" });
+            //println!("set label {} to {:?}{}", id, l, if global { " (global)" } else { "" });
         }
         id
     }
@@ -350,6 +357,9 @@ pub fn exec_file(filename: &str, source: ContextStr, target: &mut Target, asm: &
     while let Some((i, nl)) = { tokens.seek(ctx.exec_ptr); tokens.split_off(true) } {
         ctx.next_exec_ptr = tokens.pos();
         target.cur_macro_args = HashMap::new();
+        if let Some(c) = i.rest().get(0) {
+            target.current_cmd = c.span.clone();
+        }
         exec_stmt(i.rest(), nl, target, &mut ctx, asm);
         ctx.exec_ptr = ctx.next_exec_ptr;
     }
@@ -411,7 +421,13 @@ pub fn expand_defines(tokens: &mut Cow<'_, [Token]>, line: &ContextStr, target: 
         } else {
             expand_history.push(tokens[c].clone());
         }*/
-        if let Some(value) = target.defines.get(def_s) {
+        if def_s == "quasar" {
+            expanded = true;
+            recursion += 1;
+            let mut t = Token::from_number(ContextStr::internal(), 1);
+            t.span.set_parent(token.span.clone());
+            tokens.to_mut().splice(c..c+1, Some(t));
+        } else if let Some(value) = target.defines.get(def_s) {
             expanded = true;
             recursion += 1;
             let mut value = value.clone();

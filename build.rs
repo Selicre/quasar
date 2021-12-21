@@ -16,18 +16,18 @@ fn main() {
 
     mnemonics.remove(b"rep");    // grumble
 
-    writeln!(&mut file, "pub fn lower_to_16(op: u8) -> Option<u8> {{ match op {{");
+    writeln!(&mut file, "pub fn lower_to_16(op: u8) -> Option<u8> {{ match op {{").unwrap();
     for (k,v) in map.iter() {
         if let Some(c) = lower_to_16(k[3]) {
             let mut r = *k;
             r[3] = c;
             if let Some(out) = map.get(&r) {
                 writeln!(&mut file,
-                    "    {} => Some({}),", v, out);
+                    "    {} => Some({}),", v, out).unwrap();
             }
         }
     }
-    writeln!(&mut file, "    _ => None\n}} }}");
+    writeln!(&mut file, "    _ => None\n}} }}").unwrap();
 
     let mut map2 = phf_codegen::Map::new();
     for (k,v) in map {

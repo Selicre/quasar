@@ -1,12 +1,10 @@
-use std::rc::Rc;
-use std::fmt::Display;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::borrow::Cow;
 
 use indexmap::IndexSet;
 
-use crate::context::{LineInfo, LocalContext, ContextStr};
+use crate::context::{ContextStr, LineInfo};
 use crate::message::{errors, Message};
 
 //use crate::splitter::{self, Block};

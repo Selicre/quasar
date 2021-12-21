@@ -5,7 +5,7 @@ use crate::context::ContextStr;
 use crate::rom::Rom;
 
 use std::collections::HashMap;
-use std::io::{SeekFrom, Seek, Write};
+use std::io::Write;
 use std::cell::Cell;
 
 #[derive(Clone)]

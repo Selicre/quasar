@@ -1,5 +1,5 @@
 use crate::context::ContextStr;
-use std::cell::{RefCell, RefMut};
+use std::cell::RefCell;
 use std::fmt::Display;
 
 #[derive(Clone, Copy, Debug)]

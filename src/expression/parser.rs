@@ -168,7 +168,6 @@ impl S {
         v.push(self.node)
     }
     fn fmt_inner(&self, f: &mut std::fmt::Formatter, level: usize) -> std::fmt::Result {
-        use std::fmt::Write;
         if self.children.len() > 0 { f.pad("(")?; }
         write!(f, "{:?} \"{}\"", self.node.1, self.node.0)?;
         for i in self.children.iter() {

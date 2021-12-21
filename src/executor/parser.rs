@@ -686,6 +686,8 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
                     }
                 }
             }
+            // suppress warnings
+            let _ = (ram, cleaned, static_, value);
             asm.new_segment(cmd.span.clone(), crate::assembler::StartKind::Freespace { align }, target);
         }
         "org" => {

@@ -257,7 +257,6 @@ impl std::fmt::Display for ContextStr {
 }
 impl std::fmt::Debug for ContextStr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use std::fmt::Write;
         write!(f, "\"{}\"", self.escape_debug())
     }
 }

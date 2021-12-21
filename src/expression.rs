@@ -79,7 +79,6 @@ impl Expression {
 
 impl std::fmt::Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use std::fmt::Write;
         if self.nodes.len() == 0 {
             write!(f, "[empty]")?;
         }
@@ -93,7 +92,6 @@ impl std::fmt::Display for Expression {
 }
 impl std::fmt::Display for ExprNode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use std::fmt::Write;
         match self {
             ExprNode::Value(v) => match v {
                 Value::Literal { value, size_hint } => if value.fract() < 1e-6 {

@@ -61,6 +61,9 @@ impl Rom {
             buf, mapper: Mapper::LoRom, bankcross: false,
         }
     }
+    pub fn resize(&mut self, new_size: usize) {
+        self.buf.resize(new_size, 0);
+    }
     pub fn mapper(&self) -> Mapper {
         self.mapper
     }

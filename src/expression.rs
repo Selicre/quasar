@@ -14,7 +14,7 @@ type Node = (ContextStr, ExprNode);
 
 #[derive(Debug, Clone)]
 pub struct Expression {
-    nodes: Vec<Node>
+    pub nodes: Vec<Node>
 }
 
 #[derive(Debug, Clone)]

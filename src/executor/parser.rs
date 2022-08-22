@@ -404,7 +404,7 @@ fn exec_enabled(mut tokens: TokenList, newline: bool, target: &mut Target, ctx: 
             }
             ctx.enter_elseif(true);
         }
-        "endif" => {
+        "endif" | "endwhile" => {
             if ctx.if_stack.len() == 0 {
                 errors::stray_endif(cmd.span.clone()).push();
                 return;

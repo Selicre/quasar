@@ -97,6 +97,9 @@ impl Target {
             u32::from_le_bytes(v) as f64
         })
     }
+    pub fn file_len(&mut self, source: &ContextStr, filename: &str) -> Result<f64, Message> {
+        self.read_file(source, filename).map(|c| c.len() as f64)
+    }
     pub fn can_read_file(&mut self, source: &ContextStr, filename: &str) -> bool {
         self.read_file(source, filename).is_ok()
     }
@@ -129,6 +132,12 @@ impl Target {
             //println!("set label {} to {:?}{}", id, l, if global { " (global)" } else { "" });
         }
         id
+    }
+    pub fn label_from_str(&mut self, label: impl Into<String>) -> usize {
+        self.label_id(Label::Named {
+            stack: vec![label.into()],
+            invoke: None
+        }, true)
     }
     pub fn label_name(&mut self, id: usize) -> Option<&Label> {
         self.label_idx.get_index(id)

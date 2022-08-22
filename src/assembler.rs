@@ -165,7 +165,12 @@ impl Assembler {
             };
             if debug { println!(" -- segment {:06X}", addr); }
             if let Some(c) = i.pad_byte {
-                let d1 = rom.mapper().map_to_file(addr as _).unwrap();
+                // TODO: handle this properly
+                let d1 = if addr & 0xFFFF == 0x8000 {
+                    rom.mapper().map_to_file(addr as usize).unwrap()
+                } else {
+                    rom.mapper().map_to_file(addr as usize - 1).unwrap() + 1
+                };
                 let d2 = rom.mapper().map_to_file(last_addr as _).unwrap();
                 let dist = d1 - d2;
                 if (d1-1)>>15 == d2>>15 {

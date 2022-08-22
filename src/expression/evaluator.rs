@@ -194,6 +194,12 @@ impl Expression {
                             let value = if value { 1.0 } else { 0.0 };
                             StackValue::Number { value, origin: None }
                         },
+                        "filesize" => {
+                            let file = get_string(stack, target);
+                            let mut value = target.file_len(&span, &file);
+                            let value = value.map_err(|c| c.push()).ok()?;
+                            StackValue::Number { value, origin: None }
+                        },
                         "readfile1" | "readfile2" | "readfile3" | "readfile4" => {
                             // this sucks. please sort it out later
                             let c = name.chars().last().unwrap().to_digit(10).unwrap() as usize;
